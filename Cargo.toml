@@ -3,6 +3,9 @@ name = "piraterealm"
 version = "0.1.0"
 authors = ["Galaxtone", "Exopteron"]
 edition = "2018"
+description = "An experimental classicube server."
+repository = "https://github.com/Galaxtone/PirateRealm"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 # TODO Limit features in the future
