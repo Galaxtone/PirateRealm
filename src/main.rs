@@ -234,7 +234,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
   let disconnect_1 = Arc::new(Mutex::new(false));
   let disconnect_2 = disconnect_1.clone();
   let writehandle = tokio::spawn(async move {
-    /*     let player = player2.lock().await;
+         let player = player2.lock().await;
     let ourname = (*player).name.clone();
     drop(player);
     let message = format!("&e{} joined the game.", ourname);
@@ -248,7 +248,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
         system: true,
       });
       drop(lockedplayer);
-    } */
+    }
     let mut players_to_render: Vec<Arc<Mutex<Player>>> = vec![];
     let mut currently_rendering: Vec<LocalPlayer> = vec![];
     let mut free_ids = vec![0; 127];
@@ -734,9 +734,11 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
               let prefix = format!("<{}> ", ourname);
               let index = std::cmp::min(message.len(), 64 - prefix.len());
               let tosend = format!("{}{}", prefix, &message[0..index]);
+              println!("{}", tosend);
               drop(ourplayer);
               if message.len() > index {
                 let tosend = format!("> {}", &message[index..]);
+                println!("{}", tosend);
                 for i in 0..players.len() {
                   let mut lockedplayer = players[i].lock().await;
                   lockedplayer.chatbox.push(Message {
