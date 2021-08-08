@@ -1,0 +1,12 @@
+[package]
+name = "piraterealm"
+version = "0.1.0"
+authors = ["Galaxtone", "Exopteron"]
+edition = "2018"
+
+[dependencies]
+tokio = { version = "1.9", features = ["full"] }
+hyper = { version = "0.14", features = ["full"] }
+hyper-tls = "0.5"
+bytes = "1.0"
+deflate = { version = "0.9.1", features = ["gzip"] }
