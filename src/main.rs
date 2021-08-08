@@ -234,7 +234,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
   let disconnect_1 = Arc::new(Mutex::new(false));
   let disconnect_2 = disconnect_1.clone();
   let writehandle = tokio::spawn(async move {
-/*     let player = player2.lock().await;
+    /*     let player = player2.lock().await;
     let ourname = (*player).name.clone();
     drop(player);
     let message = format!("&e{} joined the game.", ourname);
@@ -262,7 +262,11 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
         return;
       }
       drop(disconnect);
-      let mut player = player2.lock().await;
+      let player = player2.try_lock();
+      if player.is_err() {
+        continue;
+      }
+      let mut player = player.unwrap();
       // Block change loop
       for _ in 0..player.block_changes.len() {
         let change = player.block_changes.pop().unwrap();
@@ -280,7 +284,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
         }
       }
       // Incoming packet loop
-/*       for _ in 0..player.incoming_packets.len() {
+      /*       for _ in 0..player.incoming_packets.len() {
         let packet = player.incoming_packets.pop().unwrap();
         let write = writehalf
           .write_all(&classic::ClassicPacketServer::serialize(packet).unwrap())
@@ -294,7 +298,11 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       } */
       let ourname = (*player).name.clone();
       drop(player);
-      let players = game2.players.lock().await;
+      let players = game2.players.try_lock();
+      if players.is_err() {
+        continue;
+      }
+      let players = players.unwrap();
 
       // New Player rendering loop
       for i in 0..players.len() {
@@ -325,8 +333,9 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       }
       drop(players);
       // Player culling loop
+      let mut rindex = 0;
       for i in 0..players_to_render.len() {
-        let player = players_to_render[i].lock().await;
+        let player = players_to_render[i - rindex].lock().await;
         let name = (*player).name.clone();
         drop(player);
         let players = game2.players.lock().await;
@@ -340,20 +349,23 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
         }
         if remove == true {
           for i in 0..players_to_render.len() {
-            let player = players_to_render[i].clone();
+            let player = players_to_render[i - rindex].clone();
             let player = player.lock().await;
             if (*player).name.clone() == name {
               players_to_render.remove(i);
+              rindex += 1;
             }
             drop(player);
           }
           let mut id = 0;
+          let mut rindex2 = 0;
           for i in 0..currently_rendering.len() {
-            let player = currently_rendering[i].player.clone();
+            let player = currently_rendering[i - rindex2].player.clone();
             let player = player.lock().await;
             if (*player).name.clone() == name {
               id = currently_rendering[i].id;
               currently_rendering.remove(i);
+              rindex2+=1;
             }
             drop(player);
           }
@@ -437,7 +449,11 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       }
 
       // Chat loop
-      let mut player = player2.lock().await;
+      let player = player2.try_lock();
+      if player.is_err() {
+        continue;
+      }
+      let mut player = player.unwrap();
       for i in 0..(*player).chatbox.len() {
         let messageclone = (*player).chatbox.pop().unwrap();
         let mut id = 0;
@@ -452,12 +468,13 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
           if ourname == sender {
             id = 0;
           } else {
-            for i in 0..currently_rendering.len() {
+            id = 0;
+            /*             for i in 0..currently_rendering.len() {
               if (*currently_rendering[i].player.lock().await).name == sender {
                 id = currently_rendering[i].id;
                 break;
               }
-            }
+            } */
           }
         } else {
           id = -1;
@@ -715,29 +732,29 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
               let mut ourplayer = player.lock().await;
               let ourname = (*ourplayer).name.clone();
               let prefix = format!("<{}> ", ourname);
-let index = std::cmp::min(message.len(), 64 - prefix.len());
-let tosend = format!("{}{}", prefix, &message[0..index]);
-drop(ourplayer);
-if message.len() > index {
-  let tosend = format!("> {}", &message[index..]);
-  for i in 0..players.len() {
-    let mut lockedplayer = players[i].lock().await;
-    lockedplayer.chatbox.push(Message {
-      message: tosend.clone(),
-      system: false,
-    });
-    drop(lockedplayer);
-  }
-}
-for i in 0..players.len() {
-  let mut lockedplayer = players[i].lock().await;
-  lockedplayer.chatbox.push(Message {
-    message: tosend.clone(),
-    system: false,
-  });
-  drop(lockedplayer);
-}
-break;
+              let index = std::cmp::min(message.len(), 64 - prefix.len());
+              let tosend = format!("{}{}", prefix, &message[0..index]);
+              drop(ourplayer);
+              if message.len() > index {
+                let tosend = format!("> {}", &message[index..]);
+                for i in 0..players.len() {
+                  let mut lockedplayer = players[i].lock().await;
+                  lockedplayer.chatbox.push(Message {
+                    message: tosend.clone(),
+                    system: false,
+                  });
+                  drop(lockedplayer);
+                }
+              }
+              for i in 0..players.len() {
+                let mut lockedplayer = players[i].lock().await;
+                lockedplayer.chatbox.push(Message {
+                  message: tosend.clone(),
+                  system: false,
+                });
+                drop(lockedplayer);
+              }
+              break;
               let message = format!("<{}> {}", ourname, message);
               println!("{}", message);
               if message.len() >= 64 {
