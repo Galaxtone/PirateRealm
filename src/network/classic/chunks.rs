@@ -1,5 +1,5 @@
 use super::ClassicPacketServer::{self, LevelInitialize, LevelDataChunk, LevelFinalize};
-use super::BlockId;
+use super::{BlockId, Block};
 
 pub struct World {
   data: Box<[BlockId]>, // XZY
@@ -32,8 +32,8 @@ impl World {
     self.data[self.pos_to_index(x, y, z)]
   }
 
-  pub fn set_block(&mut self, block: BlockId, x: usize, y: usize, z: usize) {
-    self.data[self.pos_to_index(x, y, z)] = block
+  pub fn set_block(&mut self, block: Block) {
+    self.data[self.pos_to_index(block.position.x as usize, block.position.y as usize, block.position.z as usize)] = block.id;
   }
 
   pub fn data(&self) -> &[BlockId] {

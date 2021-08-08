@@ -5,15 +5,19 @@ use tokio::io::AsyncReadExt;
 use std::pin::Pin;
 
 pub mod chunks;
-
+#[derive(Clone)]
 pub struct Position {
   pub x: i16,
   pub y: i16,
   pub z: i16
 }
-
-// To clone it in main.rs fo both packets
 #[derive(Clone)]
+pub struct Block {
+  pub position: Position,
+  pub id: BlockId
+}
+// To clone it in main.rs fo both packets
+#[derive(Clone, Debug)]
 pub struct PositionYP {
   pub x: i16,
   pub y: i16,
@@ -62,6 +66,8 @@ pub mod BlockIds {
 pub enum ClassicPacketClient {
   PlayerIdentification {protocol_ver: u8, username: String, verification_key: String},
   PositionAndOrientation {player_id: u8, position: PositionYP},
+  SetBlock {coords: Position, mode: u8, block_type: u8},
+  Message {message: String},
   Other,
 }
 
@@ -77,13 +83,17 @@ pub enum ClassicPacketServer {
   SpawnPlayer { player_id: i8, name: String, position: PositionYP},
   // remember, teleports are relative to eye level, add +51 directly to the final number to be relative to FEET, like normal minecraft. Don't confuse this as going from feet to head!
   PlayerTeleport { player_id: i8, position: PositionYP},
+  SetBlock {block: Block},
+  DespawnPlayer { player_id: i8 },
+  Message { player_id: i8, message: String},
+  DisconnectPlayer { reason: String },
 }
 
 impl ClassicPacketServer {
   pub fn serialize(packet: ClassicPacketServer) -> std::io::Result<Vec<u8>> {
     match packet {
       ClassicPacketServer::Ping => {
-        let mut builder = ClassicPacketBuilder::new();
+        let builder = ClassicPacketBuilder::new();
         return Ok(builder.build(0x01)?);
       },
       ClassicPacketServer::SpawnPlayer {player_id, name, position} => {
@@ -106,6 +116,30 @@ impl ClassicPacketServer {
         builder.insert_byte(position.yaw);
         builder.insert_byte(position.pitch);
         return Ok(builder.build(0x08)?);
+      }
+      ClassicPacketServer::DespawnPlayer { player_id } => {
+        let mut builder = ClassicPacketBuilder::new();
+        builder.insert_sbyte(player_id);
+        return Ok(builder.build(0x0c)?);
+      }
+      ClassicPacketServer::DisconnectPlayer { reason } => {
+        let mut builder = ClassicPacketBuilder::new();
+        builder.insert_string(&reason);
+        return Ok(builder.build(0x0e)?);
+      }
+      ClassicPacketServer::Message { player_id, message } => {
+        let mut builder = ClassicPacketBuilder::new();
+        builder.insert_sbyte(player_id);
+        builder.insert_string(&message);
+        return Ok(builder.build(0x0d)?);
+      }
+      ClassicPacketServer::SetBlock { block } => {
+        let mut builder = ClassicPacketBuilder::new();
+        builder.insert_short(block.position.x);
+        builder.insert_short(block.position.y);
+        builder.insert_short(block.position.z);
+        builder.insert_byte(block.id);
+        return Ok(builder.build(0x06)?);
       }
       _ => {
         return Err(Error::new(ErrorKind::Other, format!("Unknown packet")));
@@ -192,7 +226,24 @@ impl ClassicPacketReader {
         let yaw = ClassicPacketUtils::read_byte(reader).await?;
         let pitch = ClassicPacketUtils::read_byte(reader).await?;
         let coords = PositionYP {x: x, y: y, z: z, yaw: yaw, pitch: pitch};
-        let packet = ClassicPacketClient::PositionAndOrientation {player_id: id, position: coords};
+        let packet = ClassicPacketClient::PositionAndOrientation {player_id: pid, position: coords};
+        return Ok(packet);
+      }
+      0x05 => {
+        let x = ClassicPacketUtils::read_short(reader).await?;
+        let y = ClassicPacketUtils::read_short(reader).await?;
+        let z = ClassicPacketUtils::read_short(reader).await?;
+        let mode = ClassicPacketUtils::read_byte(reader).await?;
+        let blocktype = ClassicPacketUtils::read_byte(reader).await?;
+        let coords = Position {x: x, y: y, z: z};
+        let packet = ClassicPacketClient::SetBlock {coords: coords, mode: mode, block_type: blocktype};
+        return Ok(packet);
+      }
+      0x0d => {
+        let x = ClassicPacketUtils::read_byte(reader).await?;
+        drop(x);
+        let message = ClassicPacketUtils::read_string(reader).await?;
+        let packet = ClassicPacketClient::Message { message: message };
         return Ok(packet);
       }
       id => {
