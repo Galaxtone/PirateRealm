@@ -1,6 +1,10 @@
 use super::ClassicPacketServer::{self, LevelInitialize, LevelDataChunk, LevelFinalize};
 use super::BlockId;
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use std::io::Write;
+
 pub struct World {
   data: Box<[BlockId]>, // XZY
   width: usize,
@@ -46,7 +50,10 @@ impl World {
 
   // QUICK AND DIRTY
   pub fn to_packets(&self) -> Vec<ClassicPacketServer> {
-    let data = deflate::deflate_bytes_gzip(&self.data);
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&self.data);
+
+    let data = encoder.finish().unwrap();
 
     // 2 for initialize and finalize and data.len()/1024 packets for data chunk
     // just thinking ahead for allocation, shrug
