@@ -18,8 +18,8 @@ use tokio::io::AsyncWriteExt;
 
 //use classic::heartbeat;
 use classic::{
-  Block, ClassicPacketReader, ClassicPacketServer,
-  /*ClassicPacketBuilder, */Position, PositionYP,
+  Block, ClassicPacketReader, ClassicPacketServer, /*ClassicPacketBuilder, */ Position,
+  PositionYP,
 };
 #[derive(Clone, Debug)]
 pub struct Message {
@@ -150,7 +150,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
           socket
             .write_all(&classic::ClassicPacketServer::serialize(packet)?)
             .await?;
-            already_logged = true;
+          already_logged = true;
         }
         drop(lp);
       }
@@ -234,7 +234,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
   let disconnect_1 = Arc::new(Mutex::new(false));
   let disconnect_2 = disconnect_1.clone();
   let writehandle = tokio::spawn(async move {
-    let player = player2.lock().await;
+/*     let player = player2.lock().await;
     let ourname = (*player).name.clone();
     drop(player);
     let message = format!("&e{} joined the game.", ourname);
@@ -248,7 +248,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
         system: true,
       });
       drop(lockedplayer);
-    }
+    } */
     let mut players_to_render: Vec<Arc<Mutex<Player>>> = vec![];
     let mut currently_rendering: Vec<LocalPlayer> = vec![];
     let mut free_ids = vec![0; 127];
@@ -426,7 +426,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       // Chat loop
       let mut player = player2.lock().await;
       for i in 0..(*player).chatbox.len() {
-        let messageclone = (*player).chatbox[i].clone();
+        let messageclone = (*player).chatbox.pop().unwrap();
         let mut id = 0;
         if messageclone.system == false {
           let messageclone = messageclone.message.split(" ").collect::<Vec<&str>>();
@@ -451,9 +451,8 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
         }
         let packet = classic::ClassicPacketServer::Message {
           player_id: id,
-          message: (*player).chatbox[i].message.clone(),
+          message: messageclone.message,
         };
-        (*player).chatbox.remove(i);
         let write = writehalf
           .write_all(&classic::ClassicPacketServer::serialize(packet).unwrap())
           .await;
@@ -602,7 +601,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                       drop(lockedplayer);
                     }
                   }
-                } 
+                }
                 "/setblock" => {
                   let opstatus = (*ourplayer).operator;
                   if opstatus == false {
@@ -629,7 +628,6 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                   }
                   let x = x.unwrap() as i16;
 
-
                   let y = usize::from_str_radix(message[2], 10);
                   if y.is_err() {
                     ourplayer.chatbox.push(Message {
@@ -639,7 +637,6 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                     break;
                   }
                   let y = y.unwrap() as i16;
-
 
                   let z = usize::from_str_radix(message[3], 10);
                   if z.is_err() {
@@ -659,9 +656,12 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                   }
                   let id = id.unwrap() as u8;
                   let z = z.unwrap() as i16;
-                  let pos = Position {x: x, y: y, z: z};
-                  let mut block = Block { position: pos, id: id};
-/*                   let x_plrs = game.players.try_lock();
+                  let pos = Position { x: x, y: y, z: z };
+                  let mut block = Block {
+                    position: pos,
+                    id: id,
+                  };
+                  /*                   let x_plrs = game.players.try_lock();
                   if x_plrs.is_err() {
                     ourplayer.chatbox.push(Message {
                       message: "Something went wrong.".to_string(),
@@ -699,11 +699,43 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                 }
               }
             } else {
-              let ourplayer = player.lock().await;
+              let mut ourplayer = player.lock().await;
               let ourname = (*ourplayer).name.clone();
-              drop(ourplayer);
+              let prefix = format!("<{}> ", ourname);
+let index = std::cmp::min(message.len(), 64 - prefix.len());
+let tosend = format!("{}{}", prefix, &message[0..index]);
+drop(ourplayer);
+if message.len() > index {
+  let tosend = format!("> {}", &message[index..]);
+  for i in 0..players.len() {
+    let mut lockedplayer = players[i].lock().await;
+    lockedplayer.chatbox.push(Message {
+      message: tosend.clone(),
+      system: false,
+    });
+    drop(lockedplayer);
+  }
+}
+for i in 0..players.len() {
+  let mut lockedplayer = players[i].lock().await;
+  lockedplayer.chatbox.push(Message {
+    message: tosend.clone(),
+    system: false,
+  });
+  drop(lockedplayer);
+}
+break;
               let message = format!("<{}> {}", ourname, message);
               println!("{}", message);
+              if message.len() >= 64 {
+                ourplayer.chatbox.push(Message {
+                  message: "Message too long!".to_string(),
+                  system: true,
+                });
+                drop(ourplayer);
+                break;
+              }
+              drop(ourplayer);
               for i in 0..players.len() {
                 let mut lockedplayer = players[i].lock().await;
                 lockedplayer.chatbox.push(Message {
