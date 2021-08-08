@@ -280,7 +280,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
         }
       }
       // Incoming packet loop
-      for _ in 0..player.incoming_packets.len() {
+/*       for _ in 0..player.incoming_packets.len() {
         let packet = player.incoming_packets.pop().unwrap();
         let write = writehalf
           .write_all(&classic::ClassicPacketServer::serialize(packet).unwrap())
@@ -291,14 +291,18 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
           drop(disconnect);
           break;
         }
-      }
+      } */
       let ourname = (*player).name.clone();
       drop(player);
       let players = game2.players.lock().await;
 
       // New Player rendering loop
       for i in 0..players.len() {
-        let lockedplayer = players[i].lock().await;
+        let lockedplayer = players[i].try_lock();
+        if lockedplayer.is_err() {
+          continue;
+        }
+        let lockedplayer = lockedplayer.unwrap();
         let lpname = (*lockedplayer).name.clone();
         drop(lockedplayer);
         if lpname != ourname {
@@ -368,7 +372,11 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       }
       // Player spawning loop
       for i in 0..players_to_render.len() {
-        let player = players_to_render[i].lock().await;
+        let player = players_to_render[i].try_lock();
+        if player.is_err() {
+          continue;
+        }
+        let player = player.unwrap();
         let name = (*player).name.clone();
         let position = (*player).position.clone();
         drop(player);
@@ -405,9 +413,14 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       // Other player movement loop
       for i in 0..currently_rendering.len() {
         let player = currently_rendering[i].player.clone();
-        let player = player.lock().await;
+        let player = player.try_lock();
+        if player.is_err() {
+          continue;
+        }
+        let player = player.unwrap();
         let id = currently_rendering[i].id;
         let position = (*player).position.clone();
+        drop(player);
         let packet = classic::ClassicPacketServer::PlayerTeleport {
           player_id: id,
           position: position,
