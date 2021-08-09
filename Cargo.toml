@@ -1,3 +1,4 @@
+ 
 [package]
 name = "piraterealm"
 version = "0.1.0"
@@ -15,3 +16,8 @@ flate2 = "1.0"
 serde = "1.0"
 hyper = { version = "0.14", features = ["full"] }
 hyper-tls = "0.5"
+base-62 = "0.1.1"
+rand = "^0.6.0"
+native-tls = "0.2.7"
+num-integer = "0.1.4"
+perlin_noise = "1.0.1"

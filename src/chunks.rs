@@ -16,15 +16,15 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-use super::ClassicPacketServer::{self, LevelInitialize, LevelDataChunk, LevelFinalize};
-use super::{BlockId, Block};
+use super::classic::Packet::{self, LevelInitialize, LevelDataChunk, LevelFinalize};
+use super::{BlockID, Block};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::io::Write;
 
 pub struct World {
-  data: Box<[BlockId]>, // XZY
+  data: Box<[BlockID]>, // XZY
   width: usize,
   height: usize,
   length: usize,
@@ -50,7 +50,7 @@ impl World {
   }
 
   // TODO position struct type stuff
-  pub fn get_block(&self, x: usize, y: usize, z: usize) -> BlockId {
+  pub fn get_block(&self, x: usize, y: usize, z: usize) -> BlockID {
     self.data[self.pos_to_index(x, y, z)]
   }
 
@@ -58,16 +58,16 @@ impl World {
     self.data[self.pos_to_index(block.position.x as usize, block.position.y as usize, block.position.z as usize)] = block.id;
   }
 
-  pub fn data(&self) -> &[BlockId] {
+  pub fn data(&self) -> &[BlockID] {
     &self.data
   }
 
-  pub fn data_mut(&mut self) -> &mut [BlockId] {
+  pub fn data_mut(&mut self) -> &mut [BlockID] {
     &mut self.data
   }
 
   // QUICK AND DIRTY
-  pub fn to_packets(&self) -> Vec<ClassicPacketServer> {
+  pub fn to_packets(&self) -> Vec<Packet> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(&self.data);
 
@@ -109,24 +109,34 @@ impl World {
 }
 
 pub trait WorldGenerator {
-  fn generate(&self, data: &mut [BlockId], width: usize, height: usize, length: usize);
+  fn generate(&self, data: &mut [BlockID], width: usize, height: usize, length: usize);
 }
 
 pub struct FlatWorldGenerator {
   height: usize,
-  below: BlockId,
-  surface: BlockId,
-  above: BlockId,
+  below: BlockID,
+  surface: BlockID,
+  above: BlockID,
 }
+pub struct PerlinWorldGenerator {
+    height: usize,
+    below: BlockID,
+    surface: BlockID,
+    above: BlockID,
+  }
 
 impl FlatWorldGenerator {
-  pub fn new(height: usize, below: BlockId, surface: BlockId, above: BlockId) -> Self {
+  pub fn new(height: usize, below: BlockID, surface: BlockID, above: BlockID) -> Self {
     Self { height, below, surface, above }
   }
 }
-
+impl PerlinWorldGenerator {
+    pub fn new(height: usize, below: BlockID, surface: BlockID, above: BlockID) -> Self {
+      Self { height, below, surface, above }
+    }
+  }
 impl WorldGenerator for FlatWorldGenerator {
-  fn generate(&self, data: &mut [BlockId], width: usize, height: usize, length: usize) {
+  fn generate(&self, data: &mut [BlockID], width: usize, height: usize, length: usize) {
     let area = width * length;
     for y in 0..height {
       let yi = area * y;
@@ -140,3 +150,17 @@ impl WorldGenerator for FlatWorldGenerator {
     }
   }
 }
+impl WorldGenerator for PerlinWorldGenerator {
+    fn generate(&self, data: &mut [BlockID], width: usize, height: usize, length: usize) {
+        extern crate perlin_noise as perlin;
+use perlin::PerlinNoise;
+let perlin = PerlinNoise::new();
+        for y in 0..height {
+            for x in 0..width {
+                let nx = x as f64 / width as f64 - 0.5;
+                let ny = y as f64 / height as f64 - 0.5;
+                data[perlin.get2d([nx,ny]) as usize] = self.surface;
+            }
+        }
+    }
+  }
