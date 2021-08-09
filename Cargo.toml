@@ -3,10 +3,15 @@ name = "piraterealm"
 version = "0.1.0"
 authors = ["Galaxtone", "Exopteron"]
 edition = "2018"
+description = "An experimental classicube server."
+repository = "https://github.com/Galaxtone/PirateRealm"
+license = "GPL-3.0-or-later"
 
 [dependencies]
-tokio = { version = "1.9", features = ["full"] }
+# TODO Limit features in the future
+tokio = { version = "1", features = ["full"] }
+bytes = { version = "1", features = ["serde"] }
+flate2 = "1.0"
+serde = "1.0"
 hyper = { version = "0.14", features = ["full"] }
 hyper-tls = "0.5"
-bytes = "1.0"
-deflate = { version = "0.9.1", features = ["gzip"] }
