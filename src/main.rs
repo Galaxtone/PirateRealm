@@ -276,6 +276,7 @@ pub enum TempCrntIdCommand {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+  let gmts = setup_gmts();
   // Pass around immutable references, and clone the sender.
 
   //example(&gmts);
