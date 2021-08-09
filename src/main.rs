@@ -31,7 +31,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // HINT: Message passing is god and it's optimised.
 mod chunks;
-use chunks::{FlatWorldGenerator, PerlinWorldGenerator,World};
+use chunks::{FlatWorldGenerator, PerlinWorldGenerator, World};
 use std::collections::HashMap;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -145,7 +145,10 @@ impl PlayerPosition {
   pub fn distance_to(&self, target: BlockPosition) -> f64 {
     use num_integer::Roots;
 
-    return (((self.x as f64 / 32.0) - target.x as f64).powf(2.0) + ((self.y as f64 / 32.0) - target.y as f64).powf(2.0) + ((self.z as f64 / 32.0) - target.z as f64).powf(2.0)).sqrt();
+    return (((self.x as f64 / 32.0) - target.x as f64).powf(2.0)
+      + ((self.y as f64 / 32.0) - target.y as f64).powf(2.0)
+      + ((self.z as f64 / 32.0) - target.z as f64).powf(2.0))
+    .sqrt();
   }
 }
 impl Default for PlayerPosition {
@@ -201,15 +204,27 @@ pub struct GMTS {
 // block is already defined
 #[derive(Clone)]
 pub enum PlayerCommand {
-  SetBlock { block: Block },
-  SpawnPlayer { position: PlayerPosition, id: i8, name: String },
-  DespawnPlayer { id: i8 },
-  PlayerTeleport { position: PlayerPosition, id: i8 },
-  Message { id: i8, message: String },
+  SetBlock {
+    block: Block,
+  },
+  SpawnPlayer {
+    position: PlayerPosition,
+    id: i8,
+    name: String,
+  },
+  DespawnPlayer {
+    id: i8,
+  },
+  PlayerTeleport {
+    position: PlayerPosition,
+    id: i8,
+  },
+  Message {
+    id: i8,
+    message: String,
+  },
 }
-pub enum HeartbeatCommand {
-
-}
+pub enum HeartbeatCommand {}
 pub enum WorldCommand {
   GetBlock {
     pos: BlockPosition,
@@ -264,14 +279,19 @@ pub enum PlayersCommand {
     id: u32,
     message: PlayerCommand,
     res_send: oneshot::Sender<()>,
-  }
+  },
 }
 // Honestly the code looks as ugly as a raw Future implemntation
 // We could probably write some macros to insert the ugly code... in the future.
 
 pub enum TempCrntIdCommand {
-  FetchFreeID { res_send: oneshot::Sender<u32> },
-  ReturnFreeID { id: u32, res_send: oneshot::Sender<()> }
+  FetchFreeID {
+    res_send: oneshot::Sender<u32>,
+  },
+  ReturnFreeID {
+    id: u32,
+    res_send: oneshot::Sender<()>,
+  },
 }
 
 #[tokio::main]
@@ -318,8 +338,8 @@ async fn incoming_connection_handler(
           reason: "Banned name!".to_string(),
         };
         stream
-        .write_all(&ClassicPacketWriter::serialize(packet)?)
-        .await?;
+          .write_all(&ClassicPacketWriter::serialize(packet)?)
+          .await?;
         return Ok(());
       }
       let (res_send, res_recv) = oneshot::channel();
@@ -370,7 +390,7 @@ async fn incoming_connection_handler(
   //let (whsend, mut whrecv) = mpsc::channel::<classic::Packet>(10);
   let (mut readhalf, mut writehalf) = stream.into_split();
   let mut test = Box::pin(&mut readhalf);
-/*   let writehandle = tokio::spawn(async move {
+  /*   let writehandle = tokio::spawn(async move {
     loop {
       let recv = whrecv.recv().await;
       if recv.is_none() {
@@ -389,8 +409,8 @@ async fn incoming_connection_handler(
     position: PlayerPosition::from_pos(128 / 2, 64, 128 / 2),
   };
   writehalf
-  .write_all(&ClassicPacketWriter::serialize(teleport_player)?)
-  .await?;
+    .write_all(&ClassicPacketWriter::serialize(teleport_player)?)
+    .await?;
   let gmts2 = gmts.clone();
   send_message(&format!("&e{} joined the game.", our_username), -1, &gmts).await;
   let messagehandle = tokio::spawn(async move {
@@ -432,7 +452,11 @@ async fn incoming_connection_handler(
               //let packet = ClassicPacketWriter::serialize(packet)?;
             }
             PlayerCommand::SpawnPlayer { position, id, name } => {
-              let packet = classic::Packet::SpawnPlayer {player_id: id, name, position};
+              let packet = classic::Packet::SpawnPlayer {
+                player_id: id,
+                name,
+                position,
+              };
               let packet = ClassicPacketWriter::serialize(packet).unwrap();
               let write = writehalf.write_all(&packet).await;
               if write.is_err() {
@@ -443,7 +467,7 @@ async fn incoming_connection_handler(
               }
             }
             PlayerCommand::DespawnPlayer { id } => {
-              let packet = classic::Packet::DespawnPlayer {player_id: id};
+              let packet = classic::Packet::DespawnPlayer { player_id: id };
               let packet = ClassicPacketWriter::serialize(packet).unwrap();
               let write = writehalf.write_all(&packet).await;
               if write.is_err() {
@@ -468,7 +492,10 @@ async fn incoming_connection_handler(
               }
             }
             PlayerCommand::Message { id, message } => {
-              let packet = classic::Packet::Message { player_id: id, message };
+              let packet = classic::Packet::Message {
+                player_id: id,
+                message,
+              };
               let packet = ClassicPacketWriter::serialize(packet).unwrap();
               let write = writehalf.write_all(&packet).await;
               if write.is_err() {
@@ -493,8 +520,7 @@ async fn incoming_connection_handler(
     }
     drop(disc);
     //println!("Started");
-    let packet = ClassicPacketReader::read_packet_reader(&mut test)
-      .await;
+    let packet = ClassicPacketReader::read_packet_reader(&mut test).await;
     if packet.is_err() {
       let mut disc = disconnect_2.lock().await;
       *disc = true;
@@ -551,12 +577,12 @@ async fn incoming_connection_handler(
               res_send,
             })
             .await;
-            if mps.is_err() {
-              let mut disc = disconnect_2.lock().await;
-              *disc = true;
-              drop(disc);
-              break;
-            }
+          if mps.is_err() {
+            let mut disc = disconnect_2.lock().await;
+            *disc = true;
+            drop(disc);
+            break;
+          }
           let mps = res_recv.await;
           if mps.is_err() {
             let mut disc = disconnect_2.lock().await;
@@ -568,17 +594,34 @@ async fn incoming_connection_handler(
       }
       classic::Packet::PositionAndOrientationC { position, .. } => {
         let (res_send, res_recv) = oneshot::channel();
-        gmts.players_send.send(PlayersCommand::UpdatePosition { my_id: our_id, position, res_send }).await;
+        gmts
+          .players_send
+          .send(PlayersCommand::UpdatePosition {
+            my_id: our_id,
+            position,
+            res_send,
+          })
+          .await;
         res_recv.await.unwrap();
       }
       classic::Packet::MessageC { message } => {
         let prefix = format!("<{}> ", our_username);
         let index = std::cmp::min(message.len(), 64 - prefix.len());
-        send_message(&format!("{}{}", prefix, &message[0..index]), (our_id as u8) as i8, &gmts).await;
+        send_message(
+          &format!("{}{}", prefix, &message[0..index]),
+          (our_id as u8) as i8,
+          &gmts,
+        )
+        .await;
         if message.len() > index {
-          send_message(&format!("> {}", &message[index..]), (our_id as u8) as i8, &gmts).await;
+          send_message(
+            &format!("> {}", &message[index..]),
+            (our_id as u8) as i8,
+            &gmts,
+          )
+          .await;
         }
-/*         let message = PlayerCommand::Message { id: (our_id as u8) as i8, message};
+        /*         let message = PlayerCommand::Message { id: (our_id as u8) as i8, message};
         gmts.players_send.send(PlayersCommand::PassMessageToAll { message, res_send }).await;
         res_recv.await.unwrap(); */
       }
@@ -586,10 +629,22 @@ async fn incoming_connection_handler(
     }
   }
   let (res_send, res_recv) = oneshot::channel();
-  gmts.players_send.send(PlayersCommand::RemoveUser { user_id: our_id, res_send }).await;
+  gmts
+    .players_send
+    .send(PlayersCommand::RemoveUser {
+      user_id: our_id,
+      res_send,
+    })
+    .await;
   res_recv.await.unwrap();
   let (res_send, res_recv) = oneshot::channel();
-  gmts.tempcrntid_send.send(TempCrntIdCommand::ReturnFreeID { id: our_id, res_send } ).await;
+  gmts
+    .tempcrntid_send
+    .send(TempCrntIdCommand::ReturnFreeID {
+      id: our_id,
+      res_send,
+    })
+    .await;
   res_recv.await.unwrap();
   println!("Both threads closed. buh-bye!");
   send_message(&format!("&e{} left the game.", our_username), -1, &gmts).await;
@@ -597,8 +652,14 @@ async fn incoming_connection_handler(
 }
 async fn send_message(message: &str, id: i8, gmts: &GMTS) {
   let (res_send, res_recv) = oneshot::channel();
-  let message = PlayerCommand::Message { id: (id as u8) as i8, message: message.to_string()};
-  gmts.players_send.send(PlayersCommand::PassMessageToAll { message, res_send }).await;
+  let message = PlayerCommand::Message {
+    id: (id as u8) as i8,
+    message: message.to_string(),
+  };
+  gmts
+    .players_send
+    .send(PlayersCommand::PassMessageToAll { message, res_send })
+    .await;
   res_recv.await.unwrap();
 }
 async fn get_world(gmts: &GMTS) -> Result<Vec<classic::Packet>, Box<dyn std::error::Error>> {
@@ -636,8 +697,11 @@ fn setup_gmts() -> GMTS {
           };
           res_send.send(block);
         }
-        WorldCommand::SetBlock { mut block, res_send } => {
-          block.position.x -= 4;
+        WorldCommand::SetBlock {
+          mut block,
+          res_send,
+        } => {
+          block.position.x += 4;
           world.set_block(block);
           res_send.send(());
         }
@@ -650,7 +714,6 @@ fn setup_gmts() -> GMTS {
           players_send,
           res_send,
         } => {
-          let mut set = false;
           let (res_send2, res_recv2) = oneshot::channel();
           players_send
             .send(PlayersCommand::GetPosition {
@@ -674,14 +737,9 @@ fn setup_gmts() -> GMTS {
             res_recv2.await;
             res_send.send(());
           } else {
-            if block.position.x > 4 {
-              set = true;
-              block.position.x -= 4;
-            }
+            block.position.x += 4;
             world.set_block(block.clone());
-            if set == true {
-              block.position.x += 4;
-            }
+            block.position.x -= 4;
             let (res_send2, res_recv2) = oneshot::channel();
             players_send
               .send(PlayersCommand::PassMessageToAll {
@@ -707,7 +765,11 @@ fn setup_gmts() -> GMTS {
           let id = user.id;
           let name = user.name.clone();
           for player in &mut players {
-            player.1.message_send.send(PlayerCommand::SpawnPlayer { position: PlayerPosition::from_pos(128 / 2, 64, 128 / 2), id: (id as u8) as i8, name: name.clone() });
+            player.1.message_send.send(PlayerCommand::SpawnPlayer {
+              position: PlayerPosition::from_pos(128 / 2, 64, 128 / 2),
+              id: (id as u8) as i8,
+              name: name.clone(),
+            });
           }
           user_ids.insert(id, name);
           players.insert(id, user);
@@ -717,7 +779,9 @@ fn setup_gmts() -> GMTS {
           players.remove(&user_id);
           user_ids.remove(&user_id);
           for player in &mut players {
-            player.1.message_send.send(PlayerCommand::DespawnPlayer { id: (user_id as u8) as i8,});
+            player.1.message_send.send(PlayerCommand::DespawnPlayer {
+              id: (user_id as u8) as i8,
+            });
           }
           res_send.send(());
         }
@@ -735,15 +799,27 @@ fn setup_gmts() -> GMTS {
             let us = us.unwrap();
             for player in &players {
               if player.1.id != us.id {
-                us.message_send.send(PlayerCommand::SpawnPlayer { position: player.1.data.position.clone(), id: (player.1.id as u8) as i8, name: player.1.name.clone() });
+                us.message_send.send(PlayerCommand::SpawnPlayer {
+                  position: player.1.data.position.clone(),
+                  id: (player.1.id as u8) as i8,
+                  name: player.1.name.clone(),
+                });
               } else {
-                us.message_send.send(PlayerCommand::SpawnPlayer { position: player.1.data.position.clone(), id: -1, name: player.1.name.clone() });
+                us.message_send.send(PlayerCommand::SpawnPlayer {
+                  position: player.1.data.position.clone(),
+                  id: -1,
+                  name: player.1.name.clone(),
+                });
               }
             }
             res_send.send(());
           }
         }
-        PlayersCommand::UpdatePosition { my_id, position, res_send } => {
+        PlayersCommand::UpdatePosition {
+          my_id,
+          position,
+          res_send,
+        } => {
           let mut us = players.get_mut(&my_id);
           if us.is_none() {
             res_send.send(());
@@ -754,10 +830,13 @@ fn setup_gmts() -> GMTS {
             drop(us);
             for player in &players {
               if player.1.id != id {
-                player.1.message_send.send(PlayerCommand::PlayerTeleport { position: position.clone(), id: (my_id as u8) as i8 });
+                player.1.message_send.send(PlayerCommand::PlayerTeleport {
+                  position: position.clone(),
+                  id: (my_id as u8) as i8,
+                });
               }
             }
-            res_send.send(()); 
+            res_send.send(());
           }
         }
         PlayersCommand::GetPosition { id, res_send } => {
@@ -769,14 +848,18 @@ fn setup_gmts() -> GMTS {
             res_send.send(user.data.position.clone());
           }
         }
-        PlayersCommand::PassMessageToID { id, message, res_send } => {
+        PlayersCommand::PassMessageToID {
+          id,
+          message,
+          res_send,
+        } => {
           let user = players.get(&id);
           if user.is_none() {
             res_send.send(());
           } else {
             let user = user.unwrap();
             user.message_send.send(message);
-            res_send.send(()); 
+            res_send.send(());
           }
         }
       }
@@ -797,7 +880,7 @@ fn setup_gmts() -> GMTS {
         TempCrntIdCommand::ReturnFreeID { id, res_send } => {
           ids.push(id as usize);
           res_send.send(());
-        } 
+        }
       }
     }
   });
@@ -819,9 +902,7 @@ fn setup_gmts() -> GMTS {
         use native_tls::TlsConnector;
         let connector = TlsConnector::new().unwrap();
         let mut tlsstream = std::net::TcpStream::connect("classicube.net:443").unwrap();
-         let mut tlsstream = connector
-            .connect("classicube.net", tlsstream)
-            .unwrap(); 
+        let mut tlsstream = connector.connect("classicube.net", tlsstream).unwrap();
         tlsstream.write_all(request.as_bytes()).unwrap();
         let mut buf = vec![];
         tlsstream.read_to_end(&mut buf).unwrap();
@@ -830,9 +911,7 @@ fn setup_gmts() -> GMTS {
       }
     });
     loop {
-      match recv.recv().await.unwrap() {
-        
-      }
+      match recv.recv().await.unwrap() {}
     }
   });
 
@@ -840,7 +919,7 @@ fn setup_gmts() -> GMTS {
     world_send,
     players_send,
     tempcrntid_send: temp_crnt_id_send,
-    heartbeat_send
+    heartbeat_send,
   }
 }
 
@@ -890,11 +969,25 @@ pub mod classic {
     SetBlockS {
       block: Block,
     },
-    PlayerTeleportS { player_id: i8, position: PlayerPosition},
-    SpawnPlayer { player_id: i8, name: String, position: PlayerPosition},
-    DespawnPlayer { player_id: i8 },
-    Message { player_id: i8, message: String },
-    Disconnect { reason: String },
+    PlayerTeleportS {
+      player_id: i8,
+      position: PlayerPosition,
+    },
+    SpawnPlayer {
+      player_id: i8,
+      name: String,
+      position: PlayerPosition,
+    },
+    DespawnPlayer {
+      player_id: i8,
+    },
+    Message {
+      player_id: i8,
+      message: String,
+    },
+    Disconnect {
+      reason: String,
+    },
   }
 }
 
@@ -967,7 +1060,10 @@ impl ClassicPacketWriter {
         builder.insert_byte(block.id);
         return Ok(builder.build(0x06)?);
       }
-      classic::Packet::PlayerTeleportS { player_id, position } => {
+      classic::Packet::PlayerTeleportS {
+        player_id,
+        position,
+      } => {
         let mut builder = ClassicPacketBuilder::new();
         builder.insert_sbyte(player_id);
         builder.insert_short(position.x as i16);
@@ -977,7 +1073,11 @@ impl ClassicPacketWriter {
         builder.insert_byte(position.pitch);
         return Ok(builder.build(0x08)?);
       }
-      classic::Packet::SpawnPlayer {player_id, name, position} => {
+      classic::Packet::SpawnPlayer {
+        player_id,
+        name,
+        position,
+      } => {
         let mut builder = ClassicPacketBuilder::new();
         builder.insert_sbyte(player_id);
         builder.insert_string(&name);
