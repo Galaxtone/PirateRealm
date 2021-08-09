@@ -276,16 +276,12 @@ pub enum TempCrntIdCommand {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  extern crate perlin_noise as perlin;
-use perlin::PerlinNoise;
-let perlin = PerlinNoise::new();
-println!("Perlin: {:?}", perlin.get(132.2));
-  let gmts = setup_gmts();
   // Pass around immutable references, and clone the sender.
 
   //example(&gmts);
 
   let listener = TcpListener::bind("0.0.0.0:25565").await?;
+  println!("Listening on 0.0.0.0:25565");
   loop {
     let possible = listener.accept().await;
     if possible.is_err() {
@@ -306,7 +302,7 @@ async fn incoming_connection_handler(
 ) -> Result<(), Box<dyn std::error::Error>> {
   let mut test = Box::pin(&mut stream);
   let packet = ClassicPacketReader::read_packet_reader(&mut test).await?;
-  let (msg_send, mut recv) = stdmpsc::channel::<PlayerCommand>();
+  let (msg_send, recv) = stdmpsc::channel::<PlayerCommand>();
   let our_id: u32;
   let our_username: String;
   match packet {
