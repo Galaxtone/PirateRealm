@@ -73,6 +73,7 @@ pub enum ClassicPacketClient {
 
 
 /// All server packets
+#[derive(Clone)]
 pub enum ClassicPacketServer {
   ServerIdentification {protocol_ver: u8, servername: String, motd: String},
   Ping,

@@ -27,23 +27,28 @@ pub struct Message {
   pub system: bool,
 }
 // TODO Expand player struct
-pub struct Player {
-  pub name: String,
+#[derive(Clone)]
+pub struct PlayerData {
   pub position: PositionYP,
   pub operator: bool,
   pub block_changes: Vec<Block>,
   pub chatbox: Vec<Message>,
   pub incoming_packets: Vec<ClassicPacketServer>,
 }
+#[derive(Clone)]
+pub struct Player {
+  pub name: String,
+  pub data: Arc<Mutex<PlayerData>>,
+}
 pub struct LocalPlayer {
-  pub player: Arc<Mutex<Player>>,
+  pub player: Player,
   pub id: i8,
 }
 
 // TODO Everything.
 #[derive(Clone)]
 pub struct Game {
-  players: Arc<Mutex<Vec<Arc<Mutex<Player>>>>>,
+  players: Arc<Mutex<Vec<Player>>>,
   ops: Arc<Mutex<Vec<String>>>,
   world: Arc<Mutex<World>>,
 }
@@ -142,8 +147,8 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       let players = game.players.lock().await;
       let mut already_logged = false;
       for i in 0..players.len() {
-        let lp = players[i].lock().await;
-        if (*lp).name == user.username {
+        let lp = &players[i].name;
+        if lp == &user.username {
           let packet = classic::ClassicPacketServer::DisconnectPlayer {
             reason: "Already logged in!".to_string(),
           };
@@ -196,29 +201,31 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
   // Custom position relative to center of map!
   let player = Player {
     name: user.username.clone(),
-    position: PositionYP::from_pos(128 / 2, 64, 128 / 2),
-    operator: isop,
-    block_changes: Vec::new(),
-    chatbox: Vec::new(),
-    incoming_packets: Vec::new(),
+    data: Arc::new(Mutex::new(PlayerData {
+      position: PositionYP::from_pos(128 / 2, 64, 128 / 2),
+      operator: isop,
+      block_changes: Vec::new(),
+      chatbox: Vec::new(),
+      incoming_packets: Vec::new(),
+    })),
   };
 
-  let player = Arc::new(Mutex::new(player));
+  //let player = Arc::new(Mutex::new(player));
   let player_main = player.clone();
   let game_main = game.clone();
   let x = player.clone();
   let mut players = game.players.lock().await;
   players.push(x);
   drop(players);
-  let ourplayer = player.lock().await;
+  let ourplayerdata = player.data.lock().await;
   let spawn_player = classic::ClassicPacketServer::SpawnPlayer {
     player_id: -1,
-    name: ourplayer.name.clone(),
-    position: ourplayer.position.clone(),
+    name: player.name.clone(),
+    position: ourplayerdata.position.clone(),
   };
   let teleport_player = classic::ClassicPacketServer::PlayerTeleport {
     player_id: -1,
-    position: ourplayer.position.clone(),
+    position: ourplayerdata.position.clone(),
   };
   socket
     .write_all(&classic::ClassicPacketServer::serialize(spawn_player)?)
@@ -226,7 +233,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
   socket
     .write_all(&classic::ClassicPacketServer::serialize(teleport_player)?)
     .await?;
-  drop(ourplayer);
+  drop(ourplayerdata);
   /* just replace it with an actual event loop */
   let (mut readhalf, mut writehalf) = socket.into_split();
   let game2 = game.clone();
@@ -234,22 +241,20 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
   let disconnect_1 = Arc::new(Mutex::new(false));
   let disconnect_2 = disconnect_1.clone();
   let writehandle = tokio::spawn(async move {
-         let player = player2.lock().await;
-    let ourname = (*player).name.clone();
-    drop(player);
+    let ourname = player2.name.clone();
     let message = format!("&e{} joined the game.", ourname);
     let x = game2.players.lock().await;
     let players = x.clone();
     drop(x);
     for i in 0..players.len() {
-      let mut lockedplayer = players[i].lock().await;
+      let mut lockedplayer = players[i].data.lock().await;
       lockedplayer.chatbox.push(Message {
         message: message.clone(),
         system: true,
       });
       drop(lockedplayer);
     }
-    let mut players_to_render: Vec<Arc<Mutex<Player>>> = vec![];
+    let mut players_to_render: Vec<Player> = vec![];
     let mut currently_rendering: Vec<LocalPlayer> = vec![];
     let mut free_ids = vec![0; 127];
     for i in 0..127 {
@@ -262,7 +267,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
         return;
       }
       drop(disconnect);
-      let player = player2.try_lock();
+      let player = player2.data.try_lock();
       if player.is_err() {
         continue;
       }
@@ -296,7 +301,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
           break;
         }
       } */
-      let ourname = (*player).name.clone();
+      let ourname = player2.name.clone();
       drop(player);
       let players = game2.players.try_lock();
       if players.is_err() {
@@ -306,21 +311,21 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
 
       // New Player rendering loop
       for i in 0..players.len() {
-        let lockedplayer = players[i].try_lock();
+        /*         let lockedplayer = players[i].try_lock();
         if lockedplayer.is_err() {
           continue;
         }
         let lockedplayer = lockedplayer.unwrap();
         let lpname = (*lockedplayer).name.clone();
-        drop(lockedplayer);
+        drop(lockedplayer); */
+        let lpname = players[i].name.clone();
         if lpname != ourname {
-          let us = player2.lock().await;
+          //let us = player2.lock().await;
           let mut dorender = true;
           for i in 0..players_to_render.len() {
-            let lockedplayer2 = players_to_render[i].lock().await;
-            if lpname == (*lockedplayer2).name {
+            let lockedplayer2 = &players_to_render[i];
+            if lpname == lockedplayer2.name {
               dorender = false;
-              drop(lockedplayer2);
               break;
             }
             drop(lockedplayer2);
@@ -328,30 +333,26 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
           if dorender == true {
             players_to_render.push(players[i].clone());
           }
-          drop(us);
         }
       }
       drop(players);
       // Player culling loop
       let mut rindex = 0;
       for i in 0..players_to_render.len() {
-        let player = players_to_render[i - rindex].lock().await;
-        let name = (*player).name.clone();
-        drop(player);
+        let name = players_to_render[i - rindex].name.clone();
         let players = game2.players.lock().await;
         let allplrs = players.clone();
         drop(players);
         let mut remove = true;
         for i in 0..allplrs.len() {
-          if (*allplrs[i].lock().await).name == name {
+          if allplrs[i].name == name {
             remove = false;
           }
         }
         if remove == true {
           for i in 0..players_to_render.len() {
             let player = players_to_render[i - rindex].clone();
-            let player = player.lock().await;
-            if (*player).name.clone() == name {
+            if player.name.clone() == name {
               players_to_render.remove(i);
               rindex += 1;
             }
@@ -361,11 +362,10 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
           let mut rindex2 = 0;
           for i in 0..currently_rendering.len() {
             let player = currently_rendering[i - rindex2].player.clone();
-            let player = player.lock().await;
-            if (*player).name.clone() == name {
+            if player.name.clone() == name {
               id = currently_rendering[i].id;
               currently_rendering.remove(i);
-              rindex2+=1;
+              rindex2 += 1;
             }
             drop(player);
           }
@@ -384,17 +384,17 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       }
       // Player spawning loop
       for i in 0..players_to_render.len() {
-        let player = players_to_render[i].try_lock();
+        let player = players_to_render[i].data.try_lock();
         if player.is_err() {
           continue;
         }
         let player = player.unwrap();
-        let name = (*player).name.clone();
+        let name = players_to_render[i].name.clone();
         let position = (*player).position.clone();
         drop(player);
         let mut dorender = true;
         for i in 0..currently_rendering.len() {
-          if (*currently_rendering[i].player.lock().await).name == name {
+          if currently_rendering[i].player.name == name {
             dorender = false;
             break;
           }
@@ -425,7 +425,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       // Other player movement loop
       for i in 0..currently_rendering.len() {
         let player = currently_rendering[i].player.clone();
-        let player = player.try_lock();
+        let player = player.data.try_lock();
         if player.is_err() {
           continue;
         }
@@ -449,7 +449,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
       }
 
       // Chat loop
-      let player = player2.try_lock();
+      let player = player2.data.try_lock();
       if player.is_err() {
         continue;
       }
@@ -464,7 +464,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
           chars.next();
           chars.next_back();
           let sender = chars.as_str();
-          let ourname = (*player).name.clone();
+          let ourname = player2.name.clone();
           if ourname == sender {
             id = 0;
           } else {
@@ -520,7 +520,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
             player_id,
             position,
           } => {
-            let mut ourplayer = player.lock().await;
+            let mut ourplayer = player.data.lock().await;
             ourplayer.position = position;
             drop(ourplayer);
           }
@@ -530,7 +530,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
             drop(x_plrs);
             //println!("Locked fine");
             if message.starts_with("/") {
-              let mut ourplayer = player.lock().await;
+              let mut ourplayer = player.data.lock().await;
               let message = message.split(" ").collect::<Vec<&str>>();
               match message[0] {
                 "/coords" => {
@@ -572,15 +572,15 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                     let mut set = false;
                     drop(ourplayer);
                     for i in 0..players.len() {
-                      let lockedplayer = players[i].lock().await;
-                      if (*lockedplayer).name.to_lowercase() == message[1].to_lowercase() {
+                      let lockedplayer = players[i].data.lock().await;
+                      if players[i].name.to_lowercase() == message[1].to_lowercase() {
                         to = (*lockedplayer).position.clone();
                         set = true;
                         break;
                       }
                       drop(lockedplayer);
                     }
-                    let mut ourplayer = player.lock().await;
+                    let mut ourplayer = player.data.lock().await;
                     if set == false {
                       ourplayer.chatbox.push(Message {
                         message: "Couldn't tp you!".to_string(),
@@ -598,8 +598,8 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                     let mut set = false;
                     drop(ourplayer);
                     for i in 0..players.len() {
-                      let lockedplayer = players[i].lock().await;
-                      if (*lockedplayer).name.to_lowercase() == message[2].to_lowercase() {
+                      let lockedplayer = players[i].data.lock().await;
+                      if players[i].name.to_lowercase() == message[2].to_lowercase() {
                         to = (*lockedplayer).position.clone();
                         set = true;
                       }
@@ -608,7 +608,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                         break;
                       }
                     }
-                    let mut ourplayer = player.lock().await;
+                    let mut ourplayer = player.data.lock().await;
                     if set == false {
                       ourplayer.chatbox.push(Message {
                         message: "Couldn't tp!".to_string(),
@@ -618,8 +618,8 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                     }
                     drop(ourplayer);
                     for i in 0..players.len() {
-                      let mut lockedplayer = players[i].lock().await;
-                      if (*lockedplayer).name.to_lowercase() == message[1].to_lowercase() {
+                      let mut lockedplayer = players[i].data.lock().await;
+                      if players[i].name.to_lowercase() == message[1].to_lowercase() {
                         let teleport_player = classic::ClassicPacketServer::PlayerTeleport {
                           player_id: -1,
                           position: to.clone(),
@@ -702,17 +702,15 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                   let x_plrs = x_plrs.unwrap();
                   let players = x_plrs.clone(); */
                   //(*ourplayer).block_changes.push(block.clone());
-                  let ourname = (*ourplayer).name.clone();
+                  let ourname = player.name.clone();
                   drop(ourplayer);
                   for i in 0..players.len() {
-                    let mut lockedplayer = players[i].lock().await;
-                    if (*lockedplayer).name != ourname {
+                    let mut lockedplayer = players[i].data.lock().await;
+                    if players[i].name != ourname {
                       (*lockedplayer).block_changes.push(block.clone());
                     }
                     drop(lockedplayer);
                   }
-                  // Either god or galaxtone knows why this works, but without this, the world is edited wrong and re-logging makes blocks appear in the wrong location.
-                  block.position.x += 4;
                 }
                 "/kick" => {
                   ourplayer.chatbox.push(Message {
@@ -729,18 +727,16 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                 }
               }
             } else {
-              let mut ourplayer = player.lock().await;
-              let ourname = (*ourplayer).name.clone();
+              let ourname = player.name.clone();
               let prefix = format!("<{}> ", ourname);
               let index = std::cmp::min(message.len(), 64 - prefix.len());
               let tosend = format!("{}{}", prefix, &message[0..index]);
               println!("{}", tosend);
-              drop(ourplayer);
               if message.len() > index {
                 let tosend = format!("> {}", &message[index..]);
                 println!("{}", tosend);
                 for i in 0..players.len() {
-                  let mut lockedplayer = players[i].lock().await;
+                  let mut lockedplayer = players[i].data.lock().await;
                   lockedplayer.chatbox.push(Message {
                     message: tosend.clone(),
                     system: false,
@@ -749,7 +745,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                 }
               }
               for i in 0..players.len() {
-                let mut lockedplayer = players[i].lock().await;
+                let mut lockedplayer = players[i].data.lock().await;
                 lockedplayer.chatbox.push(Message {
                   message: tosend.clone(),
                   system: false,
@@ -757,7 +753,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                 drop(lockedplayer);
               }
               break;
-              let message = format!("<{}> {}", ourname, message);
+              /*               let message = format!("<{}> {}", ourname, message);
               println!("{}", message);
               if message.len() >= 64 {
                 ourplayer.chatbox.push(Message {
@@ -775,7 +771,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
                   system: false,
                 });
                 drop(lockedplayer);
-              }
+              } */
             }
           }
           classic::ClassicPacketClient::SetBlock {
@@ -802,12 +798,10 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
             let x = game.players.lock().await;
             let players = x.clone();
             drop(x);
-            let ourplayer = player.lock().await;
-            let ourname = (*ourplayer).name.clone();
-            drop(ourplayer);
+            let ourname = player.name.clone();
             for i in 0..players.len() {
-              let mut lockedplayer = players[i].lock().await;
-              if (*lockedplayer).name != ourname {
+              let mut lockedplayer = players[i].data.lock().await;
+              if players[i].name != ourname {
                 (*lockedplayer).block_changes.push(block.clone());
               }
               drop(lockedplayer);
@@ -825,13 +819,11 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
   readhandle.await.unwrap();
   writehandle.await.unwrap();
   let mut allplayers = game_main.players.lock().await;
-  let ourplayer = player_main.lock().await;
-  let ourname = (*ourplayer).name.clone();
-  drop(ourplayer);
+  let ourname = player_main.name.clone();
   for i in 0..allplayers.len() {
     let lockedplayer = allplayers[i].clone();
-    let lockedplayer = lockedplayer.lock().await;
-    if (*lockedplayer).name == ourname {
+    let lockedplayer = lockedplayer.name;
+    if lockedplayer == ourname {
       allplayers.remove(i);
       println!("Removed {} from the player pool.", ourname);
       break;
@@ -843,7 +835,7 @@ async fn process(mut socket: TcpStream, game: Game) -> Result<()> {
   let x = game_main.players.lock().await;
   let players = x.clone();
   for i in 0..players.len() {
-    let mut lockedplayer = players[i].lock().await;
+    let mut lockedplayer = players[i].data.lock().await;
     lockedplayer.chatbox.push(Message {
       message: message.clone(),
       system: true,
