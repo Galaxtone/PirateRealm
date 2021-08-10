@@ -31,7 +31,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // HINT: Message passing is god and it's optimised.
 mod chunks;
-use chunks::{FlatWorldGenerator, PerlinWorldGenerator, World};
+use chunks::{FlatWorldGenerator, PerlinWorldGenerator, World, SendableWorld};
 use std::collections::HashMap;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -241,7 +241,7 @@ pub enum WorldCommand {
     res_send: oneshot::Sender<()>,
   },
   GetWorld {
-    res_send: oneshot::Sender<Vec<classic::Packet>>,
+    res_send: oneshot::Sender<World>,
   },
 }
 
@@ -382,11 +382,12 @@ async fn incoming_connection_handler(
     false,
   )?;
   stream.write_all(&server_identification).await?;
-  let world = get_world(&gmts).await?;
-  let world_packets = ClassicPacketWriter::serialize_vec(world)?;
+  let mut world = get_world(&gmts).await?;
+  world.to_packets(&mut Box::pin(&mut stream)).await;
+/*   let world_packets = ClassicPacketWriter::serialize_vec(world)?;
   for packet in world_packets {
     stream.write_all(&packet).await?;
-  }
+  } */
   //let (whsend, mut whrecv) = mpsc::channel::<classic::Packet>(10);
   let (mut readhalf, mut writehalf) = stream.into_split();
   let mut test = Box::pin(&mut readhalf);
@@ -662,7 +663,7 @@ async fn send_message(message: &str, id: i8, gmts: &GMTS) {
     .await;
   res_recv.await.unwrap();
 }
-async fn get_world(gmts: &GMTS) -> Result<Vec<classic::Packet>, Box<dyn std::error::Error>> {
+async fn get_world(gmts: &GMTS) -> Result<World, Box<dyn std::error::Error>> {
   let (res_send, res_recv) = oneshot::channel();
   gmts
     .world_send
@@ -685,8 +686,10 @@ fn setup_gmts() -> GMTS {
   // Initialize World Managing Task
   let (world_send, mut recv) = mpsc::channel::<WorldCommand>(10);
   tokio::spawn(async move {
-    let generator = FlatWorldGenerator::new(64, BlockIds::SPONGE, BlockIds::SPONGE, BlockIds::AIR);
-    let mut world = World::new(generator, 128, 128, 128);
+    //let generator = FlatWorldGenerator::new(64, BlockIds::SPONGE, BlockIds::SPONGE, BlockIds::AIR);
+    //let mut world = World::new(generator, 128, 128, 128);
+    let mut world = World::from_file(128, 128, 128);
+    println!("Made world");
     loop {
       match recv.recv().await.unwrap() {
         WorldCommand::GetBlock { pos, res_send } => {
@@ -706,7 +709,8 @@ fn setup_gmts() -> GMTS {
           res_send.send(());
         }
         WorldCommand::GetWorld { res_send } => {
-          res_send.send(world.to_packets());
+          println!("Got a request for the world!");
+          res_send.send(world.clone());
         }
         WorldCommand::SetBlockP {
           mut block,
@@ -1045,6 +1049,32 @@ pub struct ClassicPacketWriter {}
 impl ClassicPacketWriter {
   pub fn serialize(packet: classic::Packet) -> std::io::Result<Vec<u8>> {
     match packet {
+      classic::Packet::LevelInitialize => {
+        let builder = ClassicPacketBuilder::new();
+        return builder.build(0x02);
+      }
+      classic::Packet::LevelDataChunk {
+        chunk_length,
+        chunk_data,
+        percent_complete,
+      } => {
+        let mut builder = ClassicPacketBuilder::new();
+        builder.insert_short(chunk_length as i16);
+        builder.insert_bytearray(chunk_data.to_vec());
+        builder.insert_byte(percent_complete);
+        return builder.build(0x03);
+      }
+      classic::Packet::LevelFinalize {
+        width,
+        height,
+        length,
+      } => {
+        let mut builder = ClassicPacketBuilder::new();
+        builder.insert_short(width as i16);
+        builder.insert_short(height as i16);
+        builder.insert_short(length as i16);
+        return builder.build(0x04);
+      }
       classic::Packet::PlayerIdentification {
         p_ver,
         user_name,
