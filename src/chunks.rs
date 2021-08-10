@@ -108,15 +108,29 @@ impl World {
   }
 
   // TODO position struct type stuff
-  pub fn get_block(&self, x: usize, y: usize, z: usize) -> BlockID {
-    self.data[self.pos_to_index(x, y, z)]
+  pub fn get_block(&self, x: usize, y: usize, z: usize) -> Option<BlockID> {
+    let x = self.data.get(self.pos_to_index(x, y, z));
+    match x {
+      Some(x) => {
+        return Some(*x);
+      }
+      None => {
+        return None;
+      }
+    }
   }
 
-  pub fn set_block(&mut self, block: Block) {
+  pub fn set_block(&mut self, block: Block) -> Option<()> {
     let pos = self.pos_to_index(block.position.x as usize, block.position.y as usize, block.position.z as usize);
     let p2 = pos.clone();
     drop(pos);
-    self.data[p2] = block.id;
+    let test = self.data.get(p2);
+    if test.is_some() {
+      self.data[p2] = block.id;
+      return Some(());
+    } else {
+      return None;
+    }
   }
 
   pub fn data(&self) -> &[BlockID] {

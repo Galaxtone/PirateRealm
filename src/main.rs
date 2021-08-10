@@ -228,7 +228,7 @@ pub enum HeartbeatCommand {}
 pub enum WorldCommand {
   GetBlock {
     pos: BlockPosition,
-    res_send: oneshot::Sender<Block>,
+    res_send: oneshot::Sender<Option<Block>>,
   },
   SetBlock {
     block: Block,
@@ -382,6 +382,7 @@ async fn incoming_connection_handler(
     false,
   )?;
   stream.write_all(&server_identification).await?;
+  send_message(&format!("&e{} logging in...", our_username), -1, &gmts).await;
   let mut world = get_world(&gmts).await?;
   world.to_packets(&mut Box::pin(&mut stream)).await;
 /*   let world_packets = ClassicPacketWriter::serialize_vec(world)?;
@@ -694,11 +695,15 @@ fn setup_gmts() -> GMTS {
       match recv.recv().await.unwrap() {
         WorldCommand::GetBlock { pos, res_send } => {
           let id = world.get_block(pos.x, pos.y, pos.z);
-          let block = Block {
-            position: pos,
-            id: id,
-          };
-          res_send.send(block);
+          if id.is_none() {
+            res_send.send(None);
+          } else {
+            let block = Block {
+              position: pos,
+              id: id.unwrap(),
+            };
+            res_send.send(Some(block));
+          }
         }
         WorldCommand::SetBlock {
           mut block,
@@ -727,18 +732,23 @@ fn setup_gmts() -> GMTS {
             .await;
           let coords = res_recv2.await.unwrap();
           let distance = coords.distance_to(block.position.clone());
-          if distance > 6.0 {
+          if true == false {
             println!("Reach hacking! Distance: {:?}", distance);
             let (res_send2, res_recv2) = oneshot::channel();
-            block.id = world.get_block(block.position.x, block.position.y, block.position.z);
-            players_send
-              .send(PlayersCommand::PassMessageToID {
-                id: sender_id,
-                message: PlayerCommand::SetBlock { block },
-                res_send: res_send2,
-              })
-              .await;
-            res_recv2.await;
+            let could = world.get_block(block.position.x, block.position.y, block.position.z);
+            if could.is_none() {
+
+            } else {
+              block.id = could.unwrap();
+              players_send
+                .send(PlayersCommand::PassMessageToID {
+                  id: sender_id,
+                  message: PlayerCommand::SetBlock { block },
+                  res_send: res_send2,
+                })
+                .await;
+              res_recv2.await;
+            }
             res_send.send(());
           } else {
             block.position.x += 4;
