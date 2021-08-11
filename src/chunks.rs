@@ -16,32 +16,22 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 // TODO Make CountingReader and Cursor into one AtomicCursor
-use super::classic::{Packet::{self, LevelInitialize, LevelDataChunk, LevelFinalize}};
+use super::classic::{Packet::{LevelInitialize, LevelDataChunk, LevelFinalize}};
 use super::{BlockID, Block, ClassicPacketWriter};
 use std::pin::Pin;
 use flate2::Compression;
-use flate2::read::GzEncoder;
 use flate2::GzBuilder;
-use std::io::{Read, Write};
+use std::io::{Read};
 use tokio::io::AsyncWriteExt;
 use std::sync::Arc;
-use std::cell::Cell;
-use std::io::Cursor;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use bytes::{Bytes, BytesMut};
+use bytes::{BytesMut};
 #[derive(Clone)]
 pub struct World {
   data: BytesMut, // XZY
   pub width: usize,
   pub height: usize,
   pub length: usize,
-}
-pub struct SendableWorld {
-  pub len: usize,
-  pub width: usize,
-  pub height: usize,
-  pub length: usize,
-  pub data: Arc<&'static [u8]>,
 }
 
 use std::io::Result as IoResult;
@@ -79,11 +69,9 @@ impl World {
     generator.generate(&mut data[4..], width, height, length);
     Self { data: BytesMut::from(&data[..]), width, height, length }
   }
-  pub fn from_file(width: usize, height: usize, length: usize) -> World {
+  pub fn from_file() -> World {
     use nbt::decode::read_compound_tag;
-    use std::io::Cursor;
-    println!("");
-    let mut cursor = std::io::Cursor::new(include_bytes!("../serverworldlol.cw.uncompressed"));
+    let mut cursor = std::io::Cursor::new(include_bytes!("../world.cw.uncompressed"));
     let root_tag = read_compound_tag(&mut cursor).unwrap();
     let world = root_tag.get_i8_vec("BlockArray").unwrap();
     let width = root_tag.get_i16("X").unwrap() as usize;
@@ -103,13 +91,14 @@ impl World {
     //let data = data.into_boxed_slice();
     Self { data: BytesMut::from(&data[..]), width, height, length }
   }
-  pub fn pos_to_index(&self, x: usize, y: usize, z: usize) -> usize {
-    (z + y * self.length) * self.width + x
+  pub fn pos_to_index(&self, x: usize, y: usize, z: usize) -> Option<usize> {
+    Some(((z + y * self.length) * self.width + x))
+    //(z.checked_add(y.checked_mul(self.length)?)?).checked_mul(self.width.checked_add(x)?)
   }
 
   // TODO position struct type stuff
   pub fn get_block(&self, x: usize, y: usize, z: usize) -> Option<BlockID> {
-    let x = self.data.get(self.pos_to_index(x, y, z));
+    let x = self.data.get(self.pos_to_index(x, y, z)?);
     match x {
       Some(x) => {
         return Some(*x);
@@ -121,7 +110,7 @@ impl World {
   }
 
   pub fn set_block(&mut self, block: Block) -> Option<()> {
-    let pos = self.pos_to_index(block.position.x as usize, block.position.y as usize, block.position.z as usize);
+    let pos = self.pos_to_index(block.position.x as usize, block.position.y as usize, block.position.z as usize)?;
     let p2 = pos.clone();
     drop(pos);
     let test = self.data.get(p2);
@@ -144,7 +133,7 @@ impl World {
     &mut self.data
   }
       // QUICK AND DIRTY
-      pub async fn to_packets(&mut self, mut writer: &mut Pin<Box<impl tokio::io::AsyncWriteExt>>) {
+      pub async fn to_packets(&mut self, writer: &mut Pin<Box<impl tokio::io::AsyncWriteExt>>) -> Result<(), Box<dyn std::error::Error>> {
         //let mut encoder = GzEncoder::new(self.data(), Compression::fast());
         let len = self.data().len();
         //let mut reader = &mut self.data;
@@ -152,37 +141,34 @@ impl World {
         let (mut reader, counter) = CountingReader::new(&mut data);
         let mut encoder = GzBuilder::new().comment("Rust>Java").read(&mut reader, Compression::fast());
         let serialized = ClassicPacketWriter::serialize(LevelInitialize).unwrap();
-        writer.write_all(&serialized).await;
-        let mut i: u32 = 0;
+        writer.write_all(&serialized).await?;
         loop {
           let mut x = [0; 1024];
           let res = encoder.read_exact(&mut x);
           if res.is_err() {
-            let count = counter.load(Ordering::SeqCst);
             let mut chunk_data = vec![];
-            encoder.read_to_end(&mut chunk_data);
+            encoder.read_to_end(&mut chunk_data)?;
             //println!("Reader: {:?}", counter.load(Ordering::SeqCst));
             if chunk_data.len() == 0 {
               let serialized = ClassicPacketWriter::serialize(LevelFinalize { width: self.width, height: self.height, length: self.length}).unwrap();
-              writer.write_all(&serialized).await;
-              return;
+              writer.write_all(&serialized).await?;
+              return Ok(());
             }
             let chunk_data = chunk_data.into_boxed_slice();
             let len = chunk_data.len();
             let serialized = ClassicPacketWriter::serialize(LevelDataChunk { chunk_length: len as i16, chunk_data, percent_complete: 255}).unwrap();
-            writer.write_all(&serialized).await;
+            writer.write_all(&serialized).await?;
           } else {
             let count = counter.load(Ordering::SeqCst);
             //println!("Reader: {:?}", count);
             //println!("Sending");
             //let i = i << 10;
-            let mut chunk_data = Box::new(x);
+            let chunk_data = Box::new(x);
             let serialized = ClassicPacketWriter::serialize(LevelDataChunk { chunk_length: 1024, chunk_data,
               percent_complete: (count * 255 / len) as u8,
             }).unwrap();
-            writer.write_all(&serialized).await;
+            writer.write_all(&serialized).await?;
           }
-          i += 1;
         }
       }
 }
@@ -196,23 +182,12 @@ pub struct FlatWorldGenerator {
   surface: BlockID,
   above: BlockID,
 }
-pub struct PerlinWorldGenerator {
-    height: usize,
-    below: BlockID,
-    surface: BlockID,
-    above: BlockID,
-  }
 
 impl FlatWorldGenerator {
   pub fn new(height: usize, below: BlockID, surface: BlockID, above: BlockID) -> Self {
     Self { height, below, surface, above }
   }
 }
-impl PerlinWorldGenerator {
-    pub fn new(height: usize, below: BlockID, surface: BlockID, above: BlockID) -> Self {
-      Self { height, below, surface, above }
-    }
-  }
 impl WorldGenerator for FlatWorldGenerator {
   fn generate(&self, data: &mut [BlockID], width: usize, height: usize, length: usize) {
     let area = width * length;
@@ -228,17 +203,3 @@ impl WorldGenerator for FlatWorldGenerator {
     }
   }
 }
-impl WorldGenerator for PerlinWorldGenerator {
-    fn generate(&self, data: &mut [BlockID], width: usize, height: usize, length: usize) {
-        extern crate perlin_noise as perlin;
-use perlin::PerlinNoise;
-let perlin = PerlinNoise::new();
-        for y in 0..height {
-            for x in 0..width {
-                let nx = x as f64 / width as f64 - 0.5;
-                let ny = y as f64 / height as f64 - 0.5;
-                data[perlin.get2d([nx,ny]) as usize] = self.surface;
-            }
-        }
-    }
-  }

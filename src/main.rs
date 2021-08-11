@@ -31,7 +31,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // HINT: Message passing is god and it's optimised.
 mod chunks;
-use chunks::{FlatWorldGenerator, PerlinWorldGenerator, World, SendableWorld};
+use chunks::{FlatWorldGenerator, World};
 use std::collections::HashMap;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -54,7 +54,7 @@ pub mod BlockIds {
 }
 
 /* ================================================ maths.rs ================================================ */
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BlockPosition {
   x: usize,
   y: usize,
@@ -143,11 +143,17 @@ impl PlayerPosition {
     }
   }
   pub fn distance_to(&self, target: BlockPosition) -> f64 {
-    use num_integer::Roots;
 
     return (((self.x as f64 / 32.0) - target.x as f64).powf(2.0)
       + ((self.y as f64 / 32.0) - target.y as f64).powf(2.0)
       + ((self.z as f64 / 32.0) - target.z as f64).powf(2.0))
+    .sqrt();
+  }
+  pub fn distance_to_plr(&self, target: PlayerPosition) -> f64 {
+
+    return (((self.x as f64 / 32.0) - (target.x as f64 / 32.0)).powf(2.0)
+      + ((self.y as f64 / 32.0) - (target.y as f64 / 32.0)).powf(2.0)
+      + ((self.z as f64 / 32.0) - (target.z as f64 / 32.0)).powf(2.0))
     .sqrt();
   }
 }
@@ -163,21 +169,18 @@ impl Default for PlayerPosition {
   }
 }
 type BlockID = u8;
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Block {
   position: BlockPosition,
   id: BlockID,
 }
 
-pub struct Message {
-  sender_id: u32,
-  message: String,
-}
 pub struct PlayerData {
   position: PlayerPosition,
 }
 pub struct Player {
   data: PlayerData,
+  op: bool,
   // unique identifier, shorthand
   id: u32,
   protocol: Protocol,
@@ -223,6 +226,9 @@ pub enum PlayerCommand {
     id: i8,
     message: String,
   },
+  Disconnect {
+    reason: String,
+  },
 }
 pub enum HeartbeatCommand {}
 pub enum WorldCommand {
@@ -232,13 +238,13 @@ pub enum WorldCommand {
   },
   SetBlock {
     block: Block,
-    res_send: oneshot::Sender<()>,
+    res_send: oneshot::Sender<Option<()>>,
   },
   SetBlockP {
     block: Block,
     players_send: mpsc::Sender<PlayersCommand>,
     sender_id: u32,
-    res_send: oneshot::Sender<()>,
+    res_send: oneshot::Sender<Option<()>>,
   },
   GetWorld {
     res_send: oneshot::Sender<World>,
@@ -252,6 +258,7 @@ pub enum PlayersCommand {
   }, */
   NewUser {
     user: Player,
+    pos: PlayerPosition,
     res_send: oneshot::Sender<()>,
   },
   RemoveUser {
@@ -269,16 +276,30 @@ pub enum PlayersCommand {
   UpdatePosition {
     my_id: u32,
     position: PlayerPosition,
-    res_send: oneshot::Sender<()>,
+    res_send: oneshot::Sender<Option<()>>,
+  },
+  UpdatePositionUnchecked {
+    my_id: u32,
+    position: PlayerPosition,
+    res_send: oneshot::Sender<Option<()>>,
   },
   GetPosition {
     id: u32,
-    res_send: oneshot::Sender<PlayerPosition>,
+    res_send: oneshot::Sender<Option<PlayerPosition>>,
   },
   PassMessageToID {
     id: u32,
     message: PlayerCommand,
-    res_send: oneshot::Sender<()>,
+    res_send: oneshot::Sender<Option<()>>,
+  },
+  IsOperator {
+    id: u32,
+    res_send: oneshot::Sender<bool>,
+  },
+  KickUserByName {
+    username: String,
+    reason: String,
+    res_send: oneshot::Sender<Option<()>>,
   },
 }
 // Honestly the code looks as ugly as a raw Future implemntation
@@ -294,21 +315,66 @@ pub enum TempCrntIdCommand {
   },
 }
 
+use std::io::Write;
+use chrono::Local;
+use env_logger::Builder;
+use log::LevelFilter;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+  Builder::new()
+  .format(|buf, record| {
+      writeln!(buf,
+          "[{} {}] - {}",
+          Local::now().format("%H:%M:%S"),
+          record.level(),
+          record.args()
+      )
+  })
+  .filter(None, LevelFilter::Info)
+  .init();
   let gmts = setup_gmts();
+  let cgmts = gmts.clone();
+  let console = tokio::spawn(async move {
+    loop {
+      let mut command = String::new();
+      let x = std::io::stdin().read_line(&mut command);
+      if x.is_err() {
+        log::error!("Error reading command!");
+        continue;
+      }
+      let command = command.trim();
+      let command: Vec<&str> = command.split(" ").collect();
+      
+      match command[0] {
+        "say" => {
+          let to_say = &command[1..].join(" ");
+          let to_say = format!("&d[Server] {}", to_say);
+          send_message(&to_say, -69, &cgmts).await;
+        }
+        "stop" => {
+          log::info!("Stopping server..");
+          let message = PlayerCommand::Disconnect { reason: "Server closed".to_string() };
+          pass_message_to_all(message, &cgmts).await;
+          std::process::exit(0);
+        }
+        _ => {
+          log::warn!("Unknown command \"{}\".", command[0]);
+        }
+      }
+    }
+  });
   // Pass around immutable references, and clone the sender.
 
   //example(&gmts);
 
   let listener = TcpListener::bind("0.0.0.0:25565").await?;
-  println!("Listening on 0.0.0.0:25565");
+  log::info!("Server listening on 0.0.0.0:25565");
   loop {
     let possible = listener.accept().await;
     if possible.is_err() {
       continue;
     }
-    let (stream, addr) = possible.unwrap();
+    let (stream, _) = possible.unwrap();
     let gmts = gmts.clone();
     tokio::spawn(async move {
       if let Err(e) = incoming_connection_handler(stream, &gmts).await {
@@ -326,16 +392,19 @@ async fn incoming_connection_handler(
   let (msg_send, recv) = stdmpsc::channel::<PlayerCommand>();
   let our_id: u32;
   let our_username: String;
+  let our_p_ver: u8;
+  let mut op = false;
   match packet {
     classic::Packet::PlayerIdentification {
       p_ver,
       user_name,
-      v_key,
+      v_key: _,
     } => {
+      our_p_ver = p_ver;
       our_username = user_name.clone();
-      if our_username == "BannedName" {
+      if our_username.len() >= 20 {
         let packet = classic::Packet::Disconnect {
-          reason: "Banned name!".to_string(),
+          reason: "Name too long!".to_string(),
         };
         stream
           .write_all(&ClassicPacketWriter::serialize(packet)?)
@@ -343,16 +412,39 @@ async fn incoming_connection_handler(
         return Ok(());
       }
       let (res_send, res_recv) = oneshot::channel();
-      gmts
+      let x = gmts
         .tempcrntid_send
         .send(TempCrntIdCommand::FetchFreeID { res_send })
         .await;
+      if x.is_err() {
+        panic!("This shouldn't fail!");
+      }
       our_id = res_recv.await?;
       let data = PlayerData {
         position: PlayerPosition::from_pos(128 / 2, 64, 128 / 2),
       };
+      let operators = vec!["Exopteron"];
+      for operator in &operators {
+        if &user_name == operator {
+          op = true;
+        }
+      }
+      let (res_send, res_recv) = oneshot::channel();
+      let x = gmts
+        .players_send
+        .send(PlayersCommand::KickUserByName {
+          username: user_name.clone(),
+          reason: "You logged in from another location".to_string(),
+          res_send,
+        })
+        .await;
+      if x.is_err() {
+        panic!("This shouldn't fail!");
+      }
+      res_recv.await?;
       let player = Player {
         data: data,
+        op,
         id: our_id,
         protocol: Protocol::Classic {
           plr_id: our_id as u8,
@@ -361,15 +453,19 @@ async fn incoming_connection_handler(
         message_send: msg_send.clone(),
       };
       let (res_send, res_recv) = oneshot::channel();
-      gmts
+      let pos = player.data.position.clone();
+      let x = gmts
         .players_send
         .send(PlayersCommand::NewUser {
           user: player,
+          pos,
           res_send,
         })
         .await;
+      if x.is_err() {
+        panic!("Shouldn't fail!");
+      }
       res_recv.await?;
-      println!("Got an ID: {}", our_id);
     }
     _ => {
       return Ok(());
@@ -378,14 +474,17 @@ async fn incoming_connection_handler(
   let server_identification = ClassicPacketWriter::server_identification(
     0x07,
     "Ballland".to_string(),
-    "a really good motd".to_string(),
-    false,
+    "a really good motd -hax".to_string(),
+    op,
   )?;
-  stream.write_all(&server_identification).await?;
+  stream.write_all(&server_identification).await.unwrap();
+  log::info!("{}[{}] logging in with entity id {} protocol version {}", our_username, stream.peer_addr()?.to_string(), our_id, our_p_ver);
   send_message(&format!("&e{} logging in...", our_username), -1, &gmts).await;
   let mut world = get_world(&gmts).await?;
-  world.to_packets(&mut Box::pin(&mut stream)).await;
-/*   let world_packets = ClassicPacketWriter::serialize_vec(world)?;
+  log::info!("Sending world to {}", our_username);
+  world.to_packets(&mut Box::pin(&mut stream)).await.expect("Shouldn't fail!");
+  log::info!("World sent to {}", our_username);
+  /*   let world_packets = ClassicPacketWriter::serialize_vec(world)?;
   for packet in world_packets {
     stream.write_all(&packet).await?;
   } */
@@ -410,20 +509,53 @@ async fn incoming_connection_handler(
     player_id: -1,
     position: PlayerPosition::from_pos(128 / 2, 64, 128 / 2),
   };
-  writehalf
+  let iswrite = writehalf
     .write_all(&ClassicPacketWriter::serialize(teleport_player)?)
-    .await?;
+    .await;
+  if iswrite.is_err() {
+    let (res_send, res_recv) = oneshot::channel();
+    let x = gmts
+      .players_send
+      .send(PlayersCommand::RemoveUser {
+        user_id: our_id,
+        res_send,
+      })
+      .await;
+    if x.is_err() {
+      panic!("This shouldn't fail!");
+    }
+    res_recv.await.unwrap();
+    let (res_send, res_recv) = oneshot::channel();
+    let x = gmts
+      .tempcrntid_send
+      .send(TempCrntIdCommand::ReturnFreeID {
+        id: our_id,
+        res_send,
+      })
+      .await;
+    if x.is_err() {
+      panic!("This shouldn't fail!");
+    }
+    res_recv.await.unwrap();
+    println!("Early disconnect.");
+    send_message(&format!("&e{} left the game.", our_username), -1, &gmts).await;
+    return Ok(());
+  }
   let gmts2 = gmts.clone();
+  log::info!("{} joined the game.", our_username);
   send_message(&format!("&e{} joined the game.", our_username), -1, &gmts).await;
   let messagehandle = tokio::spawn(async move {
     let (res_send, res_recv) = oneshot::channel();
-    gmts2
+    let x = gmts2
       .players_send
       .send(PlayersCommand::SpawnAllPlayers {
         my_id: our_id,
         res_send,
       })
       .await;
+    if x.is_err() {
+      panic!("Shouldn't fail!");
+    }
     let recvr = res_recv.await;
     if recvr.is_err() {
       let mut disc = disconnect_1.lock().await;
@@ -507,6 +639,17 @@ async fn incoming_connection_handler(
                 break;
               }
             }
+            PlayerCommand::Disconnect { reason } => {
+              let packet = classic::Packet::Disconnect { reason };
+              let packet = ClassicPacketWriter::serialize(packet).unwrap();
+              let write = writehalf.write_all(&packet).await;
+              if write.is_err() {
+                let mut disc = disconnect_1.lock().await;
+                *disc = true;
+                drop(disc);
+                break;
+              }
+            }
           }
         }
         Err(_) => {
@@ -564,6 +707,10 @@ async fn incoming_connection_handler(
             drop(disc);
             break;
           }
+          let mps = mps.unwrap();
+          if mps.is_none() {
+            println!("Error placing block.");
+          }
         } else {
           let block = Block {
             position: coords,
@@ -596,7 +743,7 @@ async fn incoming_connection_handler(
       }
       classic::Packet::PositionAndOrientationC { position, .. } => {
         let (res_send, res_recv) = oneshot::channel();
-        gmts
+        let x = gmts
           .players_send
           .send(PlayersCommand::UpdatePosition {
             my_id: our_id,
@@ -604,24 +751,206 @@ async fn incoming_connection_handler(
             res_send,
           })
           .await;
+        if x.is_err() {
+          panic!("Shouldn't fail!");
+        }
         res_recv.await.unwrap();
       }
       classic::Packet::MessageC { message } => {
-        let prefix = format!("<{}> ", our_username);
-        let index = std::cmp::min(message.len(), 64 - prefix.len());
-        send_message(
-          &format!("{}{}", prefix, &message[0..index]),
-          (our_id as u8) as i8,
-          &gmts,
-        )
-        .await;
-        if message.len() > index {
+        if message.starts_with("/") {
+          let command = message.split(" ").collect::<Vec<&str>>();
+          log::info!("{} issued command \"{}\"", our_username, command[0]);
+          match command[0] {
+            "/setblock" => {
+              if !op {
+                let (res_send2, res_recv2) = oneshot::channel();
+                let x = gmts
+                  .players_send
+                  .send(PlayersCommand::PassMessageToID {
+                    id: our_id,
+                    message: PlayerCommand::Message {
+                      id: -1,
+                      message: "&cInsufficient permission.".to_string(),
+                    },
+                    res_send: res_send2,
+                  })
+                  .await;
+                if x.is_err() {
+                  panic!("Shouldn't fail!");
+                }
+                res_recv2.await.expect("Shouldn't fail!");
+              } else {
+                if command.len() < 5 {
+                  let (res_send2, res_recv2) = oneshot::channel();
+                  let x = gmts
+                    .players_send
+                    .send(PlayersCommand::PassMessageToID {
+                      id: our_id,
+                      message: PlayerCommand::Message {
+                        id: -1,
+                        message: "&cUsage: /setblock (x) (y) (z) (id)".to_string(),
+                      },
+                      res_send: res_send2,
+                    })
+                    .await;
+                  if x.is_err() {
+                    panic!("Shouldn't fail!");
+                  }
+                  res_recv2.await.expect("Shouldn't fail!");
+                } else {
+                  loop {
+                    let x = usize::from_str_radix(command[1], 10);
+                    let x = match x {
+                      Ok(x) => x,
+                      Err(_) => {
+                        let (res_send2, res_recv2) = oneshot::channel();
+                        let x = gmts
+                          .players_send
+                          .send(PlayersCommand::PassMessageToID {
+                            id: our_id,
+                            message: PlayerCommand::Message {
+                              id: -1,
+                              message: "&cUsage: /setblock (x) (y) (z) (id)".to_string(),
+                            },
+                            res_send: res_send2,
+                          })
+                          .await;
+                        if x.is_err() {
+                          panic!("Shouldn't fail!");
+                        }
+                        res_recv2.await.expect("Shouldn't fail!");
+                        break;
+                      }
+                    };
+                    let y = usize::from_str_radix(command[2], 10);
+                    let y = match y {
+                      Ok(x) => x,
+                      Err(_) => {
+                        let (res_send2, res_recv2) = oneshot::channel();
+                        let x = gmts
+                          .players_send
+                          .send(PlayersCommand::PassMessageToID {
+                            id: our_id,
+                            message: PlayerCommand::Message {
+                              id: -1,
+                              message: "&cUsage: /setblock (x) (y) (z) (id)".to_string(),
+                            },
+                            res_send: res_send2,
+                          })
+                          .await;
+                        if x.is_err() {
+                          panic!("Shouldn't fail!");
+                        }
+                        res_recv2.await;
+                        break;
+                      }
+                    };
+                    let z = usize::from_str_radix(command[3], 10);
+                    let z = match z {
+                      Ok(x) => x,
+                      Err(_) => {
+                        let (res_send2, res_recv2) = oneshot::channel();
+                        let x = gmts
+                          .players_send
+                          .send(PlayersCommand::PassMessageToID {
+                            id: our_id,
+                            message: PlayerCommand::Message {
+                              id: -1,
+                              message: "&cUsage: /setblock (x) (y) (z) (id)".to_string(),
+                            },
+                            res_send: res_send2,
+                          })
+                          .await;
+                        if x.is_err() {
+                          panic!("Shouldn't fail!")
+                        }
+                        res_recv2.await.expect("Shouldn't fail!");
+                        break;
+                      }
+                    };
+                    let id = usize::from_str_radix(command[4], 10);
+                    let id = match id {
+                      Ok(x) => x,
+                      Err(_) => {
+                        let (res_send2, res_recv2) = oneshot::channel();
+                        let x = gmts
+                          .players_send
+                          .send(PlayersCommand::PassMessageToID {
+                            id: our_id,
+                            message: PlayerCommand::Message {
+                              id: -1,
+                              message: "&cUsage: /setblock (x) (y) (z) (id)".to_string(),
+                            },
+                            res_send: res_send2,
+                          })
+                          .await;
+                        if x.is_err() {
+                          panic!("Shouldn't fail!");
+                        }
+                        res_recv2.await.expect("Shouldn't fail!");
+                        break;
+                      }
+                    };
+                    let blockpos = BlockPosition { x, y, z };
+                    let block = Block {
+                      position: blockpos,
+                      id: id as u8,
+                    };
+                    let (res_send, res_recv) = oneshot::channel();
+                    let mps = gmts
+                      .world_send
+                      .send(WorldCommand::SetBlockP {
+                        block,
+                        sender_id: our_id,
+                        players_send: gmts.players_send.clone(),
+                        res_send,
+                      })
+                      .await;
+                    let mps = res_recv.await;
+                    if mps.is_err() {
+                      let mut disc = disconnect_2.lock().await;
+                      *disc = true;
+                      drop(disc);
+                      break;
+                    }
+                    break;
+                  }
+                }
+              }
+            }
+            _ => {
+              let (res_send2, res_recv2) = oneshot::channel();
+              gmts
+                .players_send
+                .send(PlayersCommand::PassMessageToID {
+                  id: our_id,
+                  message: PlayerCommand::Message {
+                    id: -1,
+                    message: "&cUnknown command.".to_string(),
+                  },
+                  res_send: res_send2,
+                })
+                .await;
+              res_recv2.await;
+            }
+          }
+        } else {
+          let prefix = format!("<{}> ", our_username);
+          let index = std::cmp::min(message.len(), 64 - prefix.len());
           send_message(
-            &format!("> {}", &message[index..]),
+            &format!("{}{}", prefix, &message[0..index]),
             (our_id as u8) as i8,
             &gmts,
           )
           .await;
+          if message.len() > index {
+            send_message(
+              &format!("> {}", &message[index..]),
+              (our_id as u8) as i8,
+              &gmts,
+            )
+            .await;
+          }
         }
         /*         let message = PlayerCommand::Message { id: (our_id as u8) as i8, message};
         gmts.players_send.send(PlayersCommand::PassMessageToAll { message, res_send }).await;
@@ -648,16 +977,25 @@ async fn incoming_connection_handler(
     })
     .await;
   res_recv.await.unwrap();
-  println!("Both threads closed. buh-bye!");
+  log::info!("{} left the game.", our_username);
   send_message(&format!("&e{} left the game.", our_username), -1, &gmts).await;
   Ok(())
 }
 async fn send_message(message: &str, id: i8, gmts: &GMTS) {
+  log::info!("[CHAT]: {}", message);
   let (res_send, res_recv) = oneshot::channel();
   let message = PlayerCommand::Message {
     id: (id as u8) as i8,
     message: message.to_string(),
   };
+  gmts
+    .players_send
+    .send(PlayersCommand::PassMessageToAll { message, res_send })
+    .await;
+  res_recv.await.unwrap();
+}
+async fn pass_message_to_all(message: PlayerCommand, gmts: &GMTS) {
+  let (res_send, res_recv) = oneshot::channel();
   gmts
     .players_send
     .send(PlayersCommand::PassMessageToAll { message, res_send })
@@ -682,21 +1020,20 @@ async fn get_world(gmts: &GMTS) -> Result<World, Box<dyn std::error::Error>> {
   let block = res_recv.await.unwrap();
   // ...
 } */
-
 fn setup_gmts() -> GMTS {
   // Initialize World Managing Task
   let (world_send, mut recv) = mpsc::channel::<WorldCommand>(10);
   tokio::spawn(async move {
     //let generator = FlatWorldGenerator::new(64, BlockIds::SPONGE, BlockIds::SPONGE, BlockIds::AIR);
     //let mut world = World::new(generator, 128, 128, 128);
-    let mut world = World::from_file(128, 128, 128);
-    println!("Made world");
+    let mut world = World::from_file();
+    log::info!("Finished initializing world");
     loop {
       match recv.recv().await.unwrap() {
         WorldCommand::GetBlock { pos, res_send } => {
           let id = world.get_block(pos.x, pos.y, pos.z);
           if id.is_none() {
-            res_send.send(None);
+            res_send.send(None).expect("Shouldn't fail");
           } else {
             let block = Block {
               position: pos,
@@ -710,12 +1047,17 @@ fn setup_gmts() -> GMTS {
           res_send,
         } => {
           block.position.x += 4;
-          world.set_block(block);
-          res_send.send(());
+          res_send.send(world.set_block(block));
         }
         WorldCommand::GetWorld { res_send } => {
-          println!("Got a request for the world!");
-          res_send.send(world.clone());
+          match res_send.send(world.clone()) {
+            Err(e) => {
+              panic!("Shouldn't fail!");
+            }
+            Ok(()) => {
+
+            }
+          }
         }
         WorldCommand::SetBlockP {
           mut block,
@@ -723,47 +1065,52 @@ fn setup_gmts() -> GMTS {
           players_send,
           res_send,
         } => {
-          let (res_send2, res_recv2) = oneshot::channel();
-          players_send
-            .send(PlayersCommand::GetPosition {
-              id: sender_id,
-              res_send: res_send2,
-            })
-            .await;
-          let coords = res_recv2.await.unwrap();
-          let distance = coords.distance_to(block.position.clone());
-          if true == false {
-            println!("Reach hacking! Distance: {:?}", distance);
-            let (res_send2, res_recv2) = oneshot::channel();
-            let could = world.get_block(block.position.x, block.position.y, block.position.z);
-            if could.is_none() {
-
+            //let distance = coords.distance_to(block.position.clone());
+            if true == false {
+/*               println!("Reach hacking! Distance: {:?}", distance);
+              let (res_send2, res_recv2) = oneshot::channel();
+              let could = world.get_block(block.position.x, block.position.y, block.position.z);
+              if could.is_none() {
+                res_send.send(None).expect("Shouldn't fail");
+              } else {
+                block.id = could.unwrap();
+                let x = players_send
+                  .send(PlayersCommand::PassMessageToID {
+                    id: sender_id,
+                    message: PlayerCommand::SetBlock { block },
+                    res_send: res_send2,
+                  })
+                  .await;
+                if x.is_err() {
+                  panic!("Shouldn't fail");
+                }
+                res_recv2.await.expect("Shouldn't fail!");
+                res_send.send(Some(())).expect("Shouldn't fail!");
+              } */
             } else {
-              block.id = could.unwrap();
-              players_send
-                .send(PlayersCommand::PassMessageToID {
-                  id: sender_id,
-                  message: PlayerCommand::SetBlock { block },
-                  res_send: res_send2,
-                })
-                .await;
-              res_recv2.await;
+              block.position.x += 4;
+              let x = world.set_block(block.clone());
+              match x {
+                Some(_) => {
+                  block.position.x -= 4;
+                  let (res_send2, res_recv2) = oneshot::channel();
+                  let x = players_send
+                    .send(PlayersCommand::PassMessageToAll {
+                      message: PlayerCommand::SetBlock { block },
+                      res_send: res_send2,
+                    })
+                    .await;
+                  if x.is_err() {
+                    panic!("Shouldn't fail!");
+                  }
+                  res_recv2.await.expect("Shouldn't fail");
+                  res_send.send(Some(())).expect("Shouldn't fail");
+                }
+                None => {
+                  res_send.send(None).expect("Shouldn't fail");
+                }
+              }
             }
-            res_send.send(());
-          } else {
-            block.position.x += 4;
-            world.set_block(block.clone());
-            block.position.x -= 4;
-            let (res_send2, res_recv2) = oneshot::channel();
-            players_send
-              .send(PlayersCommand::PassMessageToAll {
-                message: PlayerCommand::SetBlock { block },
-                res_send: res_send2,
-              })
-              .await;
-            res_recv2.await;
-            res_send.send(());
-          }
         }
       }
     }
@@ -775,19 +1122,22 @@ fn setup_gmts() -> GMTS {
     let mut user_ids: HashMap<u32, String> = HashMap::new();
     loop {
       match recv.recv().await.unwrap() {
-        PlayersCommand::NewUser { user, res_send } => {
+        PlayersCommand::NewUser { user, pos, res_send } => {
           let id = user.id;
           let name = user.name.clone();
           for player in &mut players {
-            player.1.message_send.send(PlayerCommand::SpawnPlayer {
-              position: PlayerPosition::from_pos(128 / 2, 64, 128 / 2),
+            let x = player.1.message_send.send(PlayerCommand::SpawnPlayer {
+              position: pos.clone(),
               id: (id as u8) as i8,
               name: name.clone(),
             });
+            if x.is_err() {
+              println!("Shouldn't fail");
+            }
           }
           user_ids.insert(id, name);
           players.insert(id, user);
-          res_send.send(());
+          res_send.send(()).expect("Shouldn't fail");
         }
         PlayersCommand::RemoveUser { user_id, res_send } => {
           players.remove(&user_id);
@@ -829,14 +1179,59 @@ fn setup_gmts() -> GMTS {
             res_send.send(());
           }
         }
+        PlayersCommand::IsOperator { id, res_send } => {
+          let us = players.get(&id);
+          if us.is_none() {
+            res_send.send(false);
+          } else {
+            let us = us.unwrap();
+            res_send.send(us.op);
+          }
+        }
         PlayersCommand::UpdatePosition {
           my_id,
           position,
           res_send,
         } => {
-          let mut us = players.get_mut(&my_id);
+          let us = players.get_mut(&my_id);
           if us.is_none() {
-            res_send.send(());
+            res_send.send(None).expect("Shouldn't fail");
+          } else {
+            let us = us.unwrap();
+            let distance = us.data.position.distance_to_plr(position.clone());
+            if true == false {
+              println!("{} moved wrongly!", us.name);
+              let x = us.message_send.send(PlayerCommand::PlayerTeleport {
+                position: us.data.position.clone(),
+                id: -1,
+              });
+              if x.is_err() {
+                panic!("Shouldn't fail!");
+              }
+              res_send.send(None).expect("Shouldn't fail");
+            } else {
+              us.data.position = position.clone();
+              let id = us.id.clone();
+              drop(us);
+              for player in &players {
+                if player.1.id != id {
+                  let x = player.1.message_send.send(PlayerCommand::PlayerTeleport {
+                    position: position.clone(),
+                    id: (my_id as u8) as i8,
+                  });
+                  if x.is_err() {
+                    panic!("Shouldn't fail!");
+                  }
+                }
+              }
+              res_send.send(Some(())).expect("Shouldn't fail");
+            }
+          }
+        }
+        PlayersCommand::UpdatePositionUnchecked { my_id, position, res_send } => {
+          let us = players.get_mut(&my_id);
+          if us.is_none() {
+            res_send.send(None).expect("Shouldn't fail");
           } else {
             let us = us.unwrap();
             us.data.position = position.clone();
@@ -844,22 +1239,25 @@ fn setup_gmts() -> GMTS {
             drop(us);
             for player in &players {
               if player.1.id != id {
-                player.1.message_send.send(PlayerCommand::PlayerTeleport {
+                let x = player.1.message_send.send(PlayerCommand::PlayerTeleport {
                   position: position.clone(),
                   id: (my_id as u8) as i8,
                 });
+                if x.is_err() {
+                  panic!("Shouldn't fail!");
+                }
               }
             }
-            res_send.send(());
+            res_send.send(Some(())).expect("Shouldn't fail");
           }
         }
         PlayersCommand::GetPosition { id, res_send } => {
           let user = players.get(&id);
           if user.is_none() {
-            res_send.send(PlayerPosition::default());
+            res_send.send(None);
           } else {
             let user = user.unwrap();
-            res_send.send(user.data.position.clone());
+            res_send.send(Some(user.data.position.clone()));
           }
         }
         PlayersCommand::PassMessageToID {
@@ -869,11 +1267,31 @@ fn setup_gmts() -> GMTS {
         } => {
           let user = players.get(&id);
           if user.is_none() {
-            res_send.send(());
+            res_send.send(None).expect("Shouldn't fail");
           } else {
             let user = user.unwrap();
-            user.message_send.send(message);
-            res_send.send(());
+            user.message_send.send(message).expect("Shouldn't fail");
+            res_send.send(Some(())).expect("Shouldn't fail");
+          }
+        }
+        PlayersCommand::KickUserByName {
+          username,
+          reason,
+          res_send,
+        } => {
+          let mut f = false;
+          for (id, user) in &user_ids {
+            if user == &username {
+              let user = players.get(&id).unwrap();
+              user.message_send.send(PlayerCommand::Disconnect { reason }).expect("Shouldn't fail");
+              f = true;
+              break;
+            }
+          }
+          if f {
+            res_send.send(Some(())).expect("Shouldn't fail");
+          } else {
+            res_send.send(None).expect("Shouldn't fail");
           }
         }
       }
@@ -889,11 +1307,11 @@ fn setup_gmts() -> GMTS {
     loop {
       match recv.recv().await.unwrap() {
         TempCrntIdCommand::FetchFreeID { res_send } => {
-          res_send.send(ids.pop().unwrap() as u32);
+          res_send.send(ids.pop().unwrap() as u32).expect("Shouldn't fail");
         } // ...
         TempCrntIdCommand::ReturnFreeID { id, res_send } => {
           ids.push(id as usize);
-          res_send.send(());
+          res_send.send(()).expect("Shouldn't fail");
         }
       }
     }
@@ -910,7 +1328,7 @@ fn setup_gmts() -> GMTS {
     let heartbeat_thread = tokio::spawn(async move {
       loop {
         break;
-        use std::io::{Read, Write};
+/*         use std::io::{Read, Write};
         let request = format!("GET /heartbeat.jsp?port=25565&max=10&name=Epic%20Server&public=True&version=7&salt={salt}&users=0 HTTP/1.1\r\nHost: www.classicube.net\r\nConnection: close\r\n\r\n", salt = salt2);
         extern crate native_tls;
         use native_tls::TlsConnector;
@@ -921,7 +1339,7 @@ fn setup_gmts() -> GMTS {
         let mut buf = vec![];
         tlsstream.read_to_end(&mut buf).unwrap();
         println!("Response: {:?}", String::from_utf8_lossy(&buf).to_string());
-        tokio::time::sleep(tokio::time::Duration::from_secs(45)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(45)).await; */
       }
     });
     loop {
@@ -1084,13 +1502,6 @@ impl ClassicPacketWriter {
         builder.insert_short(height as i16);
         builder.insert_short(length as i16);
         return builder.build(0x04);
-      }
-      classic::Packet::PlayerIdentification {
-        p_ver,
-        user_name,
-        v_key,
-      } => {
-        return Ok(vec![1]);
       }
       classic::Packet::SetBlockS { block } => {
         let mut builder = ClassicPacketBuilder::new();
