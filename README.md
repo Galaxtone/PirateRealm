@@ -1,5 +1,9 @@
 # Pirate Realm
 
+This repository and name are being "discontinued" because we're splitting it up:
+https://github.com/Exopteron/BetterThanMinecraft
+https://github.com/Galaxtone/DontWorryAboutIt
+
 This project is currently in it's infancy.
 
 Written and managed by Galaxtone and Exopteron.
